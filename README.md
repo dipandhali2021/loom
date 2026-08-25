@@ -222,6 +222,13 @@ replace the `generateReply` call inside `sendMessage`
 through the same `patchConversation` update the interval already uses — nothing
 above that function needs to change.
 
+**Code blocks can run.** A fence in a language the sandbox supports gets a Run
+pill; pressing it executes the code in a throwaway Firecracker microVM on Deno
+Deploy and shows stdout, stderr, the exit code and the elapsed time. Python, C,
+C++, Java, TypeScript/JavaScript and shell are wired. It is optional and off
+until a token is configured — setup and architecture are in
+[`server/SANDBOX.md`](server/SANDBOX.md).
+
 **The action row does real work.** Copy uses `expo-clipboard`, read aloud uses
 `expo-speech`, share uses React Native's `Share`, and regenerate re-streams the
 reply through the same `startStream` helper `sendMessage` uses

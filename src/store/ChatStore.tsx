@@ -12,6 +12,7 @@ import {
   listConversations,
   streamCompletion,
   type ApiConversation,
+  type GetToken,
 } from '../lib/api';
 import { useEmailOtpAuth } from '../auth/useEmailOtpAuth';
 import { createReveal } from '../lib/reveal';
@@ -60,6 +61,15 @@ type ChatStoreValue = PersistedState & {
   setModel: (model: ModelId) => void;
   setVoice: (voice: VoiceName) => void;
   setHapticsEnabled: (enabled: boolean) => void;
+  /**
+   * The Clerk session token, for callers that talk to the API on their own.
+   *
+   * Exposed here so `useAuth` stays imported in exactly two places -- this file and
+   * the sign-in flow -- rather than spreading through the component tree. The code
+   * block's Run button is the caller: its request is per-block and short-lived, with
+   * nothing for this store to hold.
+   */
+  authToken: GetToken;
   /** Ends the Clerk session, or abandons an unverified attempt, and clears local chat state. */
   signOut: () => void;
 };
@@ -636,6 +646,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       setModel: (model) => setState((prev) => ({ ...prev, model })),
       setVoice: (voice) => setState((prev) => ({ ...prev, voice })),
       setHapticsEnabled: (hapticsEnabled) => setState((prev) => ({ ...prev, hapticsEnabled })),
+      authToken: token,
       signOut: () => {
         clearTimer();
         /*
@@ -674,6 +685,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     setArchived,
     state,
     stopStreaming,
+    token,
   ]);
 
   return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>;

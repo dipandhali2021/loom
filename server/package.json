@@ -8,10 +8,12 @@
     "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
     "prisma:pull": "prisma db pull",
-    "prisma:generate": "prisma generate"
+    "prisma:generate": "prisma generate",
+    "sandbox:provision": "tsx scripts/provision-sandbox.ts"
   },
   "dependencies": {
     "@clerk/express": "^2.1.62",
+    "@deno/sandbox": "0.13.2",
     "@prisma/adapter-pg": "^7.9.1",
     "@prisma/client": "^7.9.1",
     "cors": "^2.8.6",

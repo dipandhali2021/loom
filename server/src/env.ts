@@ -1,6 +1,22 @@
 import 'dotenv/config';
 import { z } from 'zod';
 
+import type { Memory as SandboxMemory } from '@deno/sandbox';
+
+/**
+ * An optional string that treats blank as absent.
+ *
+ * `.optional()` alone is not enough: a key present in .env with an empty value --
+ * which is exactly how .env.example ships every field a developer has not filled in
+ * yet -- arrives as `""` and fails `.min(1)`. So copying the example file would stop
+ * the server from booting over a feature nobody had enabled, which is the opposite
+ * of what "optional" is for here.
+ */
+const optionalText = z.preprocess(
+  (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+  z.string().min(1).optional(),
+);
+
 const EnvSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(3000),
@@ -44,6 +60,76 @@ const EnvSchema = z.object({
   AI_MODEL_FAST: z.string().min(1),
   AI_MODEL_BALANCED: z.string().min(1),
   AI_MODEL_SMART: z.string().min(1),
+
+  /*
+   * --- Code execution (Deno Sandbox) ---------------------------------------
+   *
+   * All optional. Without a token the /execute route reports itself unavailable
+   * and nothing else changes -- a developer who has not set up Deno Deploy still
+   * gets a server that boots, which is why these are not `.min(1)` requirements
+   * like the keys above.
+   */
+
+  /** Organization token (`ddo_`) or personal token (`ddp_`, which needs the org too). */
+  DENO_DEPLOY_TOKEN: optionalText,
+  /** Required only for a personal token; an org token already names its org. */
+  DENO_DEPLOY_ORG: optionalText,
+
+  /** Sandboxes, volumes and snapshots must all share one region. */
+  SANDBOX_REGION: z.enum(['ord', 'ams']).default('ord'),
+
+  /**
+   * Snapshot slug holding the pre-installed toolchains, built once by
+   * `npm run sandbox:provision`. Without it a run boots the stock image, which
+   * has Deno but no g++, python3 or JDK -- so those languages would fail on a
+   * missing binary rather than on the user's code.
+   */
+  SANDBOX_SNAPSHOT: optionalText,
+
+  /** Wall clock for one run, compile included. */
+  SANDBOX_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(120_000).default(20_000),
+  /**
+   * RAM per sandbox. The platform accepts 768MiB-4096MiB.
+   *
+   * Shaped rather than free text, because the SDK's `Memory` type is a template
+   * literal union and a bare string would need a cast at the call site -- a cast that
+   * would happily pass "lots" through to fail at run time. The pattern is the same
+   * one the SDK accepts, so what typechecks here is what the platform will take.
+   */
+  SANDBOX_MEMORY: z
+    .string()
+    .regex(/^\d+(GB|MB|kB|GiB|MiB|KiB)$/, 'Expected a size like "1280MiB" or "2GB".')
+    .default('1280MiB')
+    .transform((value) => value as SandboxMemory),
+
+  /**
+   * How many sandboxes this server will hold open at once. Deno Deploy allows 5
+   * per organization during the pre-release, and going over that fails the
+   * create call rather than queueing, so the default leaves headroom.
+   */
+  SANDBOX_CONCURRENCY: z.coerce.number().int().min(1).max(20).default(3),
+
+  /**
+   * Give each user a persistent volume mounted at /workspace, so files a run
+   * writes are still there on the next one. Set to "false" to run entirely in
+   * the sandbox's ephemeral disk.
+   */
+  SANDBOX_PERSIST: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((value) => value === 'true'),
+  /**
+   * Size of that per-user volume.
+   *
+   * 400MB, not the 300MB the docs give as the floor: a create at 300MB comes back
+   * INTERNAL_SERVER_ERROR every time, while 400MB and up succeed. Verified against
+   * ord by walking the range.
+   */
+  SANDBOX_VOLUME_CAPACITY: z
+    .string()
+    .regex(/^\d+(GB|MB|kB|GiB|MiB|KiB)$/, 'Expected a size like "400MB" or "1GiB".')
+    .default('400MB')
+    .transform((value) => value as SandboxMemory),
 });
 
 const parsed = EnvSchema.safeParse(process.env);
@@ -77,5 +163,14 @@ export const aiModels = {
 } as const;
 
 export type AppModelId = keyof typeof aiModels;
+
+/**
+ * Whether code execution is configured at all.
+ *
+ * Checked by the route rather than asserted at boot: the app ships the Run
+ * affordance regardless, and a clear 503 from one endpoint is a better failure
+ * than a server that refuses to start for want of a feature nobody enabled.
+ */
+export const sandboxEnabled = Boolean(env.DENO_DEPLOY_TOKEN);
 
 export const appModelIds = Object.keys(aiModels) as [AppModelId, ...AppModelId[]];

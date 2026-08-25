@@ -21,5 +21,5 @@
 
     "skipLibCheck": true
   },
-  "include": ["src/**/*.ts", "prisma.config.ts"]
+  "include": ["src/**/*.ts", "scripts/**/*.ts", "prisma.config.ts"]
 }

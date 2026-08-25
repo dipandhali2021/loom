@@ -144,6 +144,34 @@ export const createConversation = (getToken: GetToken, title?: string) =>
 export const deleteConversation = (getToken: GetToken, conversationId: string) =>
   request<void>(`/api/v1/conversations/${conversationId}`, getToken, { method: 'DELETE' });
 
+// --- Code execution ---------------------------------------------------------
+
+/** What server/src/routes/execute.ts returns for one run. */
+export type RunResult = {
+  stdout: string;
+  stderr: string;
+  /** Negative when a signal ended it; 124 when the sandbox's deadline did. */
+  exitCode: number;
+  timedOut: boolean;
+  /** True when either stream was cut short by the server's output cap. */
+  truncated: boolean;
+  durationMs: number;
+  /** Whether the run had the user's persistent /workspace mounted. */
+  persisted: boolean;
+};
+
+/**
+ * Runs one code block in a sandbox and resolves with what it printed.
+ *
+ * A non-zero exit is a normal outcome, not a failure: a program with a syntax error
+ * ran exactly as asked and its message belongs on screen. Only the request itself
+ * failing -- no session, no runner configured, the platform unavailable -- throws.
+ */
+export const runCode = (
+  getToken: GetToken,
+  { code, lang, signal }: { code: string; lang: string; signal?: AbortSignal },
+) => request<RunResult>('/api/v1/execute', getToken, { method: 'POST', body: { code, lang }, signal });
+
 // --- Streaming completion ---------------------------------------------------
 
 /** The event frames server/src/routes/completions.ts emits. */

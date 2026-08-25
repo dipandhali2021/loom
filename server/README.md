@@ -49,6 +49,11 @@ npm run prisma:generate
 npm run dev
 ```
 
+Code execution — the Run button under a chat reply's code fence — is a separate,
+optional subsystem with its own setup, and it has its own guide:
+**[SANDBOX.md](SANDBOX.md)**. With no `DENO_DEPLOY_TOKEN` the server starts
+normally and reports the runner unavailable, so you can skip it entirely.
+
 ## Auth model
 
 Stateless bearer tokens, which is the right shape for a native client:

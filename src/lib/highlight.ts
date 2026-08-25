@@ -277,17 +277,20 @@ export function languageLabel(lang: string | null): string | null {
  * `console` in particular aliases to the shell spec because a transcript contains
  * shell syntax, but the transcript itself is output, not a script.
  *
- * Markup and data languages are left out for the same reason. `sql` is in: a query
- * is a thing you execute, which is the whole shape of the affordance.
+ * It is also not "which languages exist". This list must stay in step with
+ * `BY_LANG` in server/src/sandbox/languages.ts, which is the set the execution
+ * sandbox has a runtime for. Ruby, Go, Rust, Swift and the rest colour here because
+ * they colour like something this lexer knows, but the sandbox has no compiler for
+ * them, and a Run button that answers `go: command not found` is worse than no Run
+ * button. A language joins this list when the toolchain snapshot can run it.
  */
 const RUNNABLE = new Set([
+  // Deno, which is the sandbox's own runtime and needs nothing installed.
   'js', 'jsx', 'javascript', 'mjs', 'cjs', 'node', 'ts', 'tsx', 'typescript',
-  'py', 'python', 'python3', 'ipython',
-  'rb', 'ruby', 'php', 'lua', 'perl', 'pl', 'r', 'julia', 'elixir', 'exs', 'erlang',
-  'sh', 'bash', 'zsh', 'shell', 'fish', 'powershell', 'ps1',
-  'c', 'cpp', 'c++', 'cc', 'cs', 'c#', 'csharp', 'java', 'kotlin', 'kt', 'swift',
-  'go', 'golang', 'rust', 'rs', 'dart', 'scala', 'groovy', 'objc', 'zig', 'haskell', 'hs',
-  'sql', 'postgres', 'postgresql', 'mysql', 'sqlite',
+  // The three toolchains the snapshot adds, plus the shell that is always there.
+  'py', 'python', 'python3',
+  'c', 'cpp', 'c++', 'cc', 'cxx', 'java',
+  'sh', 'bash', 'zsh', 'shell',
 ]);
 
 /**

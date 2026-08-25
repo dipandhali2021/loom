@@ -1,5 +1,14 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Clipboard from 'expo-clipboard';
@@ -9,7 +18,8 @@ import { useTheme } from '../theme/ThemeProvider';
 import { useChatStore } from '../store/ChatStore';
 import { darkSyntax, isRunnable, languageLabel, lightSyntax, tokenize } from '../lib/highlight';
 import { looksLikeMermaid } from '../lib/mermaid';
-import { type } from '../theme/tokens';
+import { ApiError, runCode, type RunResult } from '../lib/api';
+import { palette, type } from '../theme/tokens';
 
 /** How long the copy button stays on its tick before returning to the glyph. */
 const COPIED_MS = 1400;
@@ -76,25 +86,174 @@ function CopyButton({ code }: { code: string }) {
 }
 
 /**
- * The "Run" pill.
+ * The "Run" pill, which executes the block in a sandbox on the server.
  *
- * No handler by design -- the ask was the affordance, not an execution backend --
- * so it is a plain `View` rather than a disabled `Pressable`. A control that dims
- * under a finger and then does nothing reads as broken; one that never responds to
- * touch reads as a label, which is what this is until there is something behind it.
- * Hidden from the accessibility tree for the same reason: announcing a button that
- * cannot be activated is worse than silence.
+ * Three states in one control, because they are three answers to the same press.
+ * Idle offers the run; running is the same pill with a spinner where the glyph was,
+ * and pressing it again cancels rather than queuing a second run; once there is
+ * output it says "Run" again, since a re-run is the obvious next thing to want.
  */
-function RunPill() {
+function RunPill({
+  running,
+  onPress,
+}: {
+  running: boolean;
+  onPress: () => void;
+}) {
   const { colors } = useTheme();
+
   return (
-    <View
-      style={[styles.run, { borderColor: colors.codeBorder }]}
-      accessibilityElementsHidden
-      importantForAccessibility="no-hide-descendants"
+    <Pressable
+      onPress={onPress}
+      hitSlop={HIT}
+      style={({ pressed }) => [
+        styles.run,
+        { borderColor: colors.codeBorder, opacity: pressed ? 0.6 : 1 },
+      ]}
+      accessibilityRole="button"
+      accessibilityLabel={running ? 'Stop running' : 'Run code'}
+      accessibilityState={{ busy: running }}
     >
-      <Feather name="play" size={RUN_GLYPH} color={colors.labelSecondary} />
-      <Text style={[type.chatCodeAction, { color: colors.labelSecondary }]}>Run</Text>
+      {/*
+        * Both glyphs sit in a box the size of the play triangle, so the pill keeps
+        * its width when one replaces the other -- a control that resizes mid-press
+        * moves out from under the finger still on it. `ActivityIndicator` has no
+        * size below "small" (20pt), so it is scaled down and taken out of the flow
+        * to fit; without `absolute` its own 20pt would set the box's width.
+        */}
+      <View style={styles.runGlyph}>
+        {running ? (
+          <ActivityIndicator
+            size="small"
+            color={colors.labelSecondary}
+            style={styles.runSpinner}
+          />
+        ) : (
+          <Feather name="play" size={RUN_GLYPH} color={colors.labelSecondary} />
+        )}
+      </View>
+      <Text style={[type.chatCodeAction, { color: colors.labelSecondary }]}>
+        {running ? 'Stop' : 'Run'}
+      </Text>
+    </Pressable>
+  );
+}
+
+/** What the output pane is showing, if anything. */
+type RunState =
+  | { phase: 'idle' }
+  | { phase: 'running' }
+  | { phase: 'done'; result: RunResult }
+  /** A request that never reached a program: no session, no runner, no network. */
+  | { phase: 'failed'; message: string };
+
+/** Empty output still deserves a line, or a successful silent run looks broken. */
+const SILENT = '(no output)';
+
+/**
+ * A one-line status above the output: how it ended, and how long it took.
+ *
+ * The exit code is only worth showing when it is not zero. On a clean run it tells
+ * the reader nothing they cannot see from the output itself, and a row of metadata
+ * over three lines of print is heavier than the thing it describes.
+ */
+function RunStatus({ result }: { result: RunResult }) {
+  const { colors } = useTheme();
+  const failed = result.exitCode !== 0;
+  const seconds = (result.durationMs / 1000).toFixed(1);
+
+  const detail = result.timedOut
+    ? `Timed out after ${seconds}s`
+    : failed
+      ? `Exit ${result.exitCode} · ${seconds}s`
+      : `${seconds}s`;
+
+  return (
+    <View style={styles.status}>
+      <Feather
+        name={result.timedOut ? 'clock' : failed ? 'alert-circle' : 'check'}
+        size={RUN_GLYPH + 2}
+        color={failed ? palette.danger : colors.labelSecondary}
+      />
+      <Text
+        style={[type.chatCodeAction, { color: failed ? palette.danger : colors.labelSecondary }]}
+        numberOfLines={1}
+      >
+        {detail}
+      </Text>
+      {result.truncated ? (
+        <Text style={[type.chatCodeAction, { color: colors.labelTertiary }]} numberOfLines={1}>
+          · output trimmed
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
+/**
+ * The output pane: whatever the program printed, under the source it came from.
+ *
+ * stdout and stderr are shown in one run rather than as two labelled sections. That
+ * is how a terminal shows them, and it is what makes an exception's traceback read
+ * as following the output that preceded it. stderr is tinted only when the program
+ * actually failed -- plenty of well-behaved programs log progress to stderr, and
+ * colouring that red would report a successful run as a broken one.
+ *
+ * Not selectable-scrollable sideways like the source: output wraps. A long line of
+ * print carries no indentation to protect, and a pane that pans while the code above
+ * it pans separately reads as two unrelated things.
+ */
+function Output({ state }: { state: Exclude<RunState, { phase: 'idle' }> }) {
+  const { colors } = useTheme();
+
+  if (state.phase === 'running') {
+    return (
+      <View style={[styles.output, { borderTopColor: colors.codeBorder }]}>
+        <View style={styles.status}>
+          <ActivityIndicator size="small" color={colors.labelSecondary} />
+          <Text style={[type.chatCodeAction, { color: colors.labelSecondary }]}>Running…</Text>
+        </View>
+      </View>
+    );
+  }
+
+  if (state.phase === 'failed') {
+    return (
+      <View style={[styles.output, { borderTopColor: colors.codeBorder }]}>
+        <View style={styles.status}>
+          <Feather name="alert-circle" size={RUN_GLYPH + 2} color={palette.danger} />
+          <Text style={[type.chatCodeAction, { color: palette.danger }]}>Could not run</Text>
+        </View>
+        <Text style={[type.chatCode, styles.outputText, { color: colors.labelSecondary }]} selectable>
+          {state.message}
+        </Text>
+      </View>
+    );
+  }
+
+  const { result } = state;
+  const failed = result.exitCode !== 0;
+  const empty = !result.stdout && !result.stderr;
+
+  return (
+    <View style={[styles.output, { borderTopColor: colors.codeBorder }]}>
+      <RunStatus result={result} />
+      {empty ? (
+        <Text style={[type.chatCode, styles.outputText, { color: colors.labelTertiary }]}>
+          {SILENT}
+        </Text>
+      ) : (
+        <Text style={[type.chatCode, styles.outputText]} selectable>
+          {result.stdout ? (
+            <Text style={{ color: colors.labelPrimary }}>{result.stdout}</Text>
+          ) : null}
+          {result.stderr ? (
+            <Text style={{ color: failed ? palette.danger : colors.labelSecondary }}>
+              {result.stderr}
+            </Text>
+          ) : null}
+        </Text>
+      )}
     </View>
   );
 }
@@ -236,6 +395,86 @@ function FullScreen({
 }
 
 /**
+ * Drives one block's Run button: the request, its state, and cancelling it.
+ *
+ * The abort controller is the whole reason this is a hook rather than a handler.
+ * A run holds a sandbox open, and sandboxes are a small fixed pool shared by every
+ * user of the server -- so a block scrolled off screen mid-run, or a second press,
+ * has to actually release it rather than leave it running until its own deadline.
+ */
+function useRun(code: string, lang: string | null) {
+  const { authToken, hapticsEnabled } = useChatStore();
+  const [state, setState] = useState<RunState>({ phase: 'idle' });
+  const inFlight = useRef<AbortController | null>(null);
+
+  // A block can leave the transcript mid-run -- scrolled far enough away, or its
+  // message regenerated -- and the request should go with it.
+  useEffect(() => () => inFlight.current?.abort(), []);
+
+  /*
+   * Output belongs to the code that produced it. A fence still streaming rewrites
+   * `code` on every chunk, and a regenerated reply replaces it wholesale; keeping
+   * the old output under either would attribute one program's print to another.
+   *
+   * Compared against a ref rather than keyed on `[code]`, so the reset happens only
+   * on a real change and not once more on mount.
+   */
+  const ran = useRef(code);
+  useEffect(() => {
+    if (ran.current === code) return;
+    ran.current = code;
+    inFlight.current?.abort();
+    inFlight.current = null;
+    setState({ phase: 'idle' });
+  }, [code]);
+
+  const run = useCallback(async () => {
+    // A second press while one is in flight cancels rather than queueing: the pill
+    // says "Stop" at that point, which is the promise being kept.
+    if (inFlight.current) {
+      inFlight.current.abort();
+      inFlight.current = null;
+      setState({ phase: 'idle' });
+      return;
+    }
+    if (!lang) return;
+
+    if (hapticsEnabled && Platform.OS !== 'web') {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    }
+
+    const controller = new AbortController();
+    inFlight.current = controller;
+    setState({ phase: 'running' });
+
+    try {
+      const result = await runCode(authToken, { code, lang, signal: controller.signal });
+      if (controller.signal.aborted) return;
+      setState({ phase: 'done', result });
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      /*
+       * `ApiError` carries the server's own sentence -- "not configured", "runner
+       * busy", "session expired" -- and those are the useful ones. Anything else is
+       * the transport, which from a phone is nearly always the dev server not being
+       * reachable, so it says that rather than echoing a stack.
+       */
+      setState({
+        phase: 'failed',
+        message:
+          error instanceof ApiError
+            ? error.message
+            : 'Could not reach the server. Check that it is running and that EXPO_PUBLIC_API_URL points at it.',
+      });
+    } finally {
+      if (inFlight.current === controller) inFlight.current = null;
+    }
+  }, [authToken, code, hapticsEnabled, lang]);
+
+  return { state, run };
+}
+
+/**
  * A fenced code block: a header strip naming the language and carrying its
  * controls, over the highlighted source.
  *
@@ -253,6 +492,7 @@ export function CodeBlock({ code, lang }: { code: string; lang: string | null })
   const isMermaid = lang?.toLowerCase() === 'mermaid' || looksLikeMermaid(code);
   // Hooks cannot be conditional, so the parse is gated by its own argument.
   const diagram = useDiagram(isMermaid ? code : null);
+  const { state: runState, run } = useRun(code, lang);
 
   const [showingSource, setShowingSource] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -284,7 +524,9 @@ export function CodeBlock({ code, lang }: { code: string; lang: string | null })
         ) : (
           <View style={styles.actions}>
             <CopyButton code={code} />
-            {isRunnable(lang) ? <RunPill /> : null}
+            {isRunnable(lang) ? (
+              <RunPill running={runState.phase === 'running'} onPress={run} />
+            ) : null}
           </View>
         )}
       </View>
@@ -296,6 +538,10 @@ export function CodeBlock({ code, lang }: { code: string; lang: string | null })
       ) : (
         <Source code={code} lang={lang} />
       )}
+
+      {/* Under the source, inside the same rounded block: the output is this
+          block's, and a separate card would break that. */}
+      {runState.phase === 'idle' ? null : <Output state={runState} />}
 
       {expanded && diagram ? (
         <FullScreen diagram={diagram} label={title} onClose={() => setExpanded(false)} />
@@ -333,6 +579,33 @@ const styles = StyleSheet.create({
     paddingHorizontal: 9,
     paddingVertical: 4,
   },
+  /*
+   * A fixed box for whichever of the two glyphs is showing, so swapping the play
+   * triangle for a spinner does not change the pill's width. The spinner is the
+   * larger of the two, and `small` measures 20pt on both platforms.
+   */
+  runGlyph: {
+    width: RUN_GLYPH + 2,
+    height: RUN_GLYPH + 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  runSpinner: { position: 'absolute', transform: [{ scale: (RUN_GLYPH + 3) / 20 }] },
+  /*
+   * The output pane. Same horizontal padding as `body`, so print lines up with the
+   * source above it, and a hairline above rather than a gap: they are one block.
+   */
+  output: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 12,
+    paddingTop: 8,
+    paddingBottom: 10,
+    gap: 6,
+  },
+  status: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  // Output wraps rather than panning, so it needs the tighter leading of prose --
+  // `chatCode`'s 22pt over 15pt is set for code that never wraps.
+  outputText: { lineHeight: 20 },
   // Padding on the content, not the scroll view: on the view it would clip away
   // at the first pan.
   body: { paddingHorizontal: 12, paddingVertical: 10 },
