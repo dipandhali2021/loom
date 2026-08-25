@@ -2,5 +2,18 @@
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
     "strict": true
-  }
+  },
+  "include": [
+    "**/*.ts",
+    "**/*.tsx",
+    ".expo/types/**/*.ts",
+    "expo-env.d.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    // The Express API is a separate package with its own compiler settings
+    // (nodenext + allowImportingTsExtensions, which the generated Prisma client
+    // requires). Type-check it with `npm --prefix server run typecheck`.
+    "server"
+  ]
 }
