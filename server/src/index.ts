@@ -10,6 +10,23 @@ const server = app.listen(env.PORT, () => {
   console.log(`[server] listening on port ${env.PORT} (${env.NODE_ENV})`);
 });
 
+/*
+ * Fail loudly when the port is taken.
+ *
+ * Without this the process died on an unhandled 'error' event while `tsx watch`
+ * stayed alive watching files -- so the terminal looked like a running dev server
+ * and nothing was serving. `npm run dev` clears the port before starting, so
+ * reaching this means something outside this project has it.
+ */
+server.on('error', (error: NodeJS.ErrnoException) => {
+  if (error.code === 'EADDRINUSE') {
+    console.error(`[server] port ${env.PORT} is already in use.`);
+    console.error(`[server] Find the owner with: ss -ltnp | grep :${env.PORT}`);
+    process.exit(1);
+  }
+  throw error;
+});
+
 let shuttingDown = false;
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {

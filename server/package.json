@@ -4,12 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
+    "dev": "node scripts/dev.mjs",
     "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
     "prisma:pull": "prisma db pull",
     "prisma:generate": "prisma generate",
-    "sandbox:provision": "tsx scripts/provision-sandbox.ts"
+    "sandbox:provision": "tsx scripts/provision-sandbox.ts",
+    "dev:raw": "tsx watch src/index.ts"
   },
   "dependencies": {
     "@clerk/express": "^2.1.62",
