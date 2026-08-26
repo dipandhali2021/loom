@@ -9,8 +9,39 @@ import { HttpError } from './http.ts';
  * config surface a client library brings with it.
  */
 
-export type ChatRole = 'system' | 'user' | 'assistant';
-export type ChatMessage = { role: ChatRole; content: string };
+export type ChatRole = 'system' | 'user' | 'assistant' | 'tool';
+
+/** One call the model asked for, as it goes back into the conversation. */
+export type ToolCall = {
+  id: string;
+  type: 'function';
+  function: { name: string; arguments: string };
+};
+
+/**
+ * A turn in the conversation sent upstream.
+ *
+ * `content` is nullable because an assistant turn that only asked for a tool has no
+ * text, and the endpoint expects the field present and null rather than absent.
+ * `tool_calls` and `tool_call_id` are snake_case because these objects are serialised
+ * straight into the request body -- renaming them here would mean mapping them back.
+ */
+export type ChatMessage = {
+  role: ChatRole;
+  content: string | null;
+  tool_calls?: ToolCall[];
+  tool_call_id?: string;
+};
+
+/** A function the model may call, in the OpenAI tools shape. */
+export type ToolSpec = {
+  type: 'function';
+  function: {
+    name: string;
+    description: string;
+    parameters: Record<string, unknown>;
+  };
+};
 
 /** How long to wait for the *first* byte before giving up on the upstream. */
 const CONNECT_TIMEOUT_MS = 30_000;
@@ -27,8 +58,18 @@ export class AiError extends HttpError {
   }
 }
 
+type DeltaToolCall = {
+  index?: number;
+  id?: string;
+  type?: string;
+  function?: { name?: string; arguments?: string };
+};
+
 type StreamChunk = {
-  choices?: { delta?: { content?: string | null }; finish_reason?: string | null }[];
+  choices?: {
+    delta?: { content?: string | null; tool_calls?: DeltaToolCall[] };
+    finish_reason?: string | null;
+  }[];
   usage?: { prompt_tokens?: number; completion_tokens?: number } | null;
 };
 
@@ -37,6 +78,8 @@ export type StreamResult = {
   finishReason: string | null;
   inputTokens: number | null;
   outputTokens: number | null;
+  /** Calls the model asked for. Empty unless `finishReason` is 'tool_calls'. */
+  toolCalls: ToolCall[];
 };
 
 /**
@@ -49,11 +92,14 @@ export type StreamResult = {
 export async function streamChatCompletion({
   model,
   messages,
+  tools,
   onDelta,
   signal,
 }: {
   model: string;
   messages: ChatMessage[];
+  /** Functions the model may call this pass. Omitted entirely when there are none. */
+  tools?: ToolSpec[];
   onDelta: (delta: string) => void;
   signal?: AbortSignal;
 }): Promise<StreamResult> {
@@ -85,7 +131,17 @@ export async function streamChatCompletion({
         'Content-Type': 'application/json',
         Accept: 'text/event-stream',
       },
-      body: JSON.stringify({ model, messages, stream: true }),
+      /*
+       * `tools` is spread in rather than sent as undefined: an endpoint that does not
+       * support them can reject the key even when it is null, and a turn with nothing
+       * to call has no reason to mention them.
+       */
+      body: JSON.stringify({
+        model,
+        messages,
+        stream: true,
+        ...(tools && tools.length > 0 ? { tools, tool_choice: 'auto' } : {}),
+      }),
       signal: controller.signal,
     });
 
@@ -110,6 +166,14 @@ export async function streamChatCompletion({
     let finishReason: string | null = null;
     let inputTokens: number | null = null;
     let outputTokens: number | null = null;
+    /*
+     * Keyed by the `index` the frame carries, not pushed in arrival order: parallel
+     * calls arrive as separate frames distinguished only by that index, and two calls
+     * appended blindly would merge into one if either ever fragments. On this
+     * deployment `arguments` does arrive whole in a single frame -- checked -- but the
+     * protocol allows it to be split, so the string is appended rather than assigned.
+     */
+    const calls = new Map<number, { id: string; name: string; args: string }>();
 
     for await (const data of readSse(response.body, () => arm(STALL_TIMEOUT_MS))) {
       if (data === '[DONE]') break;
@@ -128,6 +192,16 @@ export async function streamChatCompletion({
         text += delta;
         onDelta(delta);
       }
+      for (const part of choice?.delta?.tool_calls ?? []) {
+        const index = part.index ?? 0;
+        const existing = calls.get(index) ?? { id: '', name: '', args: '' };
+        calls.set(index, {
+          id: part.id ?? existing.id,
+          name: part.function?.name ?? existing.name,
+          args: existing.args + (part.function?.arguments ?? ''),
+        });
+      }
+
       if (choice?.finish_reason) finishReason = choice.finish_reason;
       // Usage arrives on the final frame, alongside finish_reason.
       if (chunk.usage) {
@@ -136,11 +210,27 @@ export async function streamChatCompletion({
       }
     }
 
-    return { text, finishReason, inputTokens, outputTokens };
+    const toolCalls: ToolCall[] = [...calls.entries()]
+      .sort(([a], [b]) => a - b)
+      .filter(([, call]) => call.id && call.name)
+      .map(([, call]) => ({
+        id: call.id,
+        type: 'function' as const,
+        function: { name: call.name, arguments: call.args },
+      }));
+
+    return { text, finishReason, inputTokens, outputTokens, toolCalls };
   } catch (error) {
     if (timedOut) throw new AiError('The AI provider timed out.', 504);
     // The client hung up: not an error, just an empty result to persist.
-    if (signal?.aborted) return { text: '', finishReason: 'aborted', inputTokens: null, outputTokens: null };
+    if (signal?.aborted)
+      return {
+        text: '',
+        finishReason: 'aborted',
+        inputTokens: null,
+        outputTokens: null,
+        toolCalls: [],
+      };
     if (error instanceof HttpError) throw error;
     console.error('[ai] request failed', error);
     throw new AiError('The AI provider could not be reached.');

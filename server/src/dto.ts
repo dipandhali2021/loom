@@ -23,11 +23,29 @@ import type {
 /** Roles the app knows about (src/store/types.ts). `system` is internal-only. */
 export type ClientRole = 'user' | 'assistant';
 
+/**
+ * One web page a reply cited, as the app renders it in the source list under the turn.
+ *
+ * A narrower shape than the search result it came from: rank, score and the provider's
+ * raw payload are retrieval detail with nothing to show, and `fetched` is the one bit
+ * the UI needs -- a source whose page was read is quotable, one that is only a link
+ * was found but not opened.
+ */
+export type SourceDTO = {
+  title: string;
+  url: string;
+  displayUrl: string;
+  publishedAt: string | null;
+  fetched: boolean;
+};
+
 export type MessageDTO = {
   id: string;
   role: ClientRole;
   text: string;
   pending?: boolean;
+  /** Present only on a reply that actually searched. */
+  sources?: SourceDTO[];
   createdAt: number;
 };
 
@@ -66,13 +84,42 @@ export type ProfileDTO = {
 export const isClientRole = (role: MessageRole): role is ClientRole =>
   role === 'user' || role === 'assistant';
 
+/**
+ * Reads the `sources` column back into the DTO shape.
+ *
+ * The column is `jsonb`, so what comes out is whatever went in -- including rows
+ * written by an older build, or by hand. Each entry is checked field by field rather
+ * than cast, because a malformed one would otherwise reach the app as a source with an
+ * undefined url and render as a broken link.
+ */
+function toSourceDTOs(value: unknown): SourceDTO[] | null {
+  if (!Array.isArray(value)) return null;
+  const sources = value.flatMap((entry) => {
+    if (!entry || typeof entry !== 'object') return [];
+    const row = entry as Record<string, unknown>;
+    if (typeof row.url !== 'string' || typeof row.title !== 'string') return [];
+    return [
+      {
+        title: row.title,
+        url: row.url,
+        displayUrl: typeof row.displayUrl === 'string' ? row.displayUrl : row.url,
+        publishedAt: typeof row.publishedAt === 'string' ? row.publishedAt : null,
+        fetched: row.fetched === true,
+      },
+    ];
+  });
+  return sources.length > 0 ? sources : null;
+}
+
 export function toMessageDTO(message: Message): MessageDTO {
+  const sources = toSourceDTOs(message.sources);
   return {
     id: message.id,
     role: message.role === 'assistant' ? 'assistant' : 'user',
     text: message.content,
     // Only send the flag when it is true; the app treats it as optional.
     ...(message.status === 'complete' ? {} : { pending: true }),
+    ...(sources ? { sources } : {}),
     createdAt: message.createdAt.getTime(),
   };
 }

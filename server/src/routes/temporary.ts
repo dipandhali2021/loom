@@ -2,10 +2,10 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 
-import { streamChatCompletion } from '../ai.ts';
+import { runTurn } from '../agent.ts';
 import { currentUser } from '../auth.ts';
 import { prisma } from '../db.ts';
-import { aiModels, appModelIds } from '../env.ts';
+import { aiModels, appModelIds, webSearchEnabled } from '../env.ts';
 import type { AgentProfile } from '../generated/prisma/client.ts';
 import { HttpError, parseBody } from '../http.ts';
 import { systemPrompt, toChatMessages } from '../prompt.ts';
@@ -60,6 +60,8 @@ const TemporaryBody = z.object({
     )
     .max(MAX_HISTORY)
     .default([]),
+  /** The composer's web-search switch, same as the stored route. */
+  search: z.boolean().default(false),
 });
 
 export async function postTemporaryCompletion(req: Request, res: Response): Promise<void> {
@@ -94,16 +96,20 @@ export async function postTemporaryCompletion(req: Request, res: Response): Prom
   const clientGone = new AbortController();
   res.on('close', () => clientGone.abort());
 
+  const searchAllowed = body.search && webSearchEnabled;
+
   let result;
   try {
-    result = await streamChatCompletion({
+    result = await runTurn({
       model,
       messages: [
-        { role: 'system', content: systemPrompt(profile) },
+        { role: 'system', content: systemPrompt(profile, searchAllowed) },
         ...toChatMessages(body.history.map((turn) => ({ role: turn.role, content: turn.text }))),
         { role: 'user', content: body.text },
       ],
+      searchAllowed,
       onDelta: (delta) => send(res, { type: 'delta', text: delta }),
+      onTool: (event) => send(res, { type: 'tool', ...event }),
       signal: clientGone.signal,
     });
   } catch (error) {
@@ -120,8 +126,16 @@ export async function postTemporaryCompletion(req: Request, res: Response): Prom
    * `done` carries the assembled text but no message: there is no stored row to
    * describe. The client already has every character from the deltas; this frame is
    * what tells it the turn is finished and whether it finished cleanly.
+   *
+   * Sources ride on the frame for the same reason -- a temporary turn's citations exist
+   * only in the client's copy, and go when it does.
    */
-  send(res, { type: 'done', text: result.text, finishReason: result.finishReason });
+  send(res, {
+    type: 'done',
+    text: result.text,
+    finishReason: result.finishReason,
+    ...(result.searches > 0 ? { sources: result.sources } : {}),
+  });
   res.end();
 }
 

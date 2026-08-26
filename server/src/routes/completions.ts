@@ -1,12 +1,13 @@
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 
-import { streamChatCompletion } from '../ai.ts';
+import { runTurn } from '../agent.ts';
 import { currentUser } from '../auth.ts';
 import { prisma } from '../db.ts';
 import { toMessageDTO } from '../dto.ts';
-import { aiModels, appModelIds } from '../env.ts';
+import { aiModels, appModelIds, webSearchEnabled } from '../env.ts';
 import { HttpError, notFound, parseBody } from '../http.ts';
+import { Prisma } from '../generated/prisma/client.ts';
 import { HISTORY_LIMIT, systemPrompt, toChatMessages } from '../prompt.ts';
 import { openStream, send } from '../sse.ts';
 
@@ -29,6 +30,15 @@ const CompletionBody = z.object({
    * would be generated with the rejected one still in its history.
    */
   regenerateMessageId: z.uuid().optional(),
+  /**
+   * The composer's web-search switch. Per turn rather than per conversation: it is a
+   * property of the question ("what shipped this week") and not of the chat, and the
+   * user flips it in the same sheet they attach a file from.
+   *
+   * A request asking for it on a server with WEB_SEARCH="false" is not an error -- the
+   * turn simply runs without the tool, the way it did before there was one.
+   */
+  search: z.boolean().default(false),
 });
 
 /** First line of the opening message, trimmed to something that fits a list row. */
@@ -106,7 +116,19 @@ export async function postCompletion(req: Request, res: Response): Promise<void>
       }),
       prisma.message.update({
         where: { id: replacing.id },
-        data: { content: '', status: 'incomplete', model, inputTokens: null, outputTokens: null },
+        /*
+         * `sources: null` matters as much as the empty content: a re-answer that does
+         * not search must not keep the citations of the reply it replaced, which would
+         * leave links under an answer that never consulted them.
+         */
+        data: {
+          content: '',
+          status: 'incomplete',
+          model,
+          inputTokens: null,
+          outputTokens: null,
+          sources: Prisma.DbNull,
+        },
       }),
       prisma.conversation.update({ where: { id: conversationId }, data: { updatedAt: now } }),
     ]);
@@ -147,16 +169,30 @@ export async function postCompletion(req: Request, res: Response): Promise<void>
   const clientGone = new AbortController();
   res.on('close', () => clientGone.abort());
 
+  /*
+   * The tool is offered only when the user asked for it *and* the server has it on.
+   * Both halves are checked here rather than inside the loop, so a turn that is not
+   * searching takes exactly the path it took before this feature existed.
+   */
+  const searchAllowed = body.search && webSearchEnabled;
+
   let result;
   try {
-    result = await streamChatCompletion({
+    result = await runTurn({
       model,
       messages: [
-        { role: 'system', content: systemPrompt(profile) },
+        { role: 'system', content: systemPrompt(profile, searchAllowed) },
         ...toChatMessages(history.reverse()),
         { role: 'user', content: body.text },
       ],
+      searchAllowed,
       onDelta: (delta) => send(res, { type: 'delta', text: delta }),
+      /*
+       * Forwarded as it happens, not summarised at the end: the whole point is that
+       * the wait -- which a search makes several seconds longer -- says what it is
+       * waiting for. The client's thinking indicator reads these.
+       */
+      onTool: (event) => send(res, { type: 'tool', ...event }),
       signal: clientGone.signal,
     });
   } catch (error) {
@@ -190,6 +226,12 @@ export async function postCompletion(req: Request, res: Response): Promise<void>
         status: result.finishReason === 'stop' ? 'complete' : 'incomplete',
         inputTokens: result.inputTokens,
         outputTokens: result.outputTokens,
+        /*
+         * Only written when a search ran. Left alone otherwise, so a regenerate that
+         * does not search clears the old citations (above) and an ordinary turn never
+         * touches the column at all.
+         */
+        ...(result.searches > 0 ? { sources: result.sources } : {}),
       },
     });
     await tx.conversation.update({

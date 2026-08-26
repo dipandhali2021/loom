@@ -62,6 +62,31 @@ const EnvSchema = z.object({
   AI_MODEL_SMART: z.string().min(1),
 
   /*
+   * --- Web search -----------------------------------------------------------
+   *
+   * The same deployment and the same key as the chat models above: this endpoint
+   * exposes /search and /web/fetch alongside /chat/completions, so there is no
+   * second credential to configure and nothing to enable per environment.
+   *
+   * What is configurable is the provider each call names, because that is the one
+   * part the deployment does not default for us -- it rejects an unknown provider
+   * rather than picking one.
+   */
+
+  /** Search provider. `exa` is the only one with search credentials on this deployment. */
+  AI_SEARCH_PROVIDER: z.string().min(1).default('exa'),
+  /** Page-fetch provider. `exa` is fastest; `firecrawl` returns cleaner titles for double the cost. */
+  AI_FETCH_PROVIDER: z.string().min(1).default('exa'),
+  /**
+   * Turns the tool off without removing the credentials, the way SANDBOX_PERSIST
+   * turns off volumes. Any value but "false" leaves it on.
+   */
+  WEB_SEARCH: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((value) => value === 'true'),
+
+  /*
    * --- Code execution (Deno Sandbox) ---------------------------------------
    *
    * All optional. Without a token the /execute route reports itself unavailable
@@ -172,5 +197,16 @@ export type AppModelId = keyof typeof aiModels;
  * than a server that refuses to start for want of a feature nobody enabled.
  */
 export const sandboxEnabled = Boolean(env.DENO_DEPLOY_TOKEN);
+
+/**
+ * Whether the model may search the web when the user asks it to.
+ *
+ * Unlike `sandboxEnabled` this needs no extra credential -- the search endpoint
+ * lives on AI_BASE_URL behind AI_API_KEY, both of which are already required -- so
+ * the only thing it can be off for is a deliberate WEB_SEARCH="false". The client
+ * still ships the toggle either way, and a request with it on simply comes back
+ * without having searched.
+ */
+export const webSearchEnabled = env.WEB_SEARCH;
 
 export const appModelIds = Object.keys(aiModels) as [AppModelId, ...AppModelId[]];
