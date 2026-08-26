@@ -78,6 +78,15 @@ type ChatStoreValue = PersistedState & {
   temporary: boolean;
   /** Opens or closes the temporary chat. Closing discards its turns. */
   setTemporary: (on: boolean) => void;
+  /**
+   * Web search is armed for the next turn, per the composer panel's switch.
+   *
+   * Not persisted, unlike `model` or `voice`. Every search spends money upstream, so
+   * it is a decision for the session in front of the user rather than one an app
+   * launch inherits silently from last week.
+   */
+  webSearch: boolean;
+  setWebSearch: (on: boolean) => void;
   /** Conversations shown in the drawer (archived ones excluded). */
   visibleConversations: Conversation[];
   archivedConversations: Conversation[];
@@ -143,6 +152,8 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
    */
   const [temporary, setTemporaryOpen] = useState(false);
   const [temporaryMessages, setTemporaryMessages] = useState<Message[]>([]);
+  // See `webSearch` on ChatStoreValue for why this is not in `state`.
+  const [webSearch, setWebSearch] = useState(false);
   /** Aborts the in-flight turn: the Stop button, a new send, or an unmount. */
   const streamAbort = useRef<AbortController | null>(null);
 
@@ -161,7 +172,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
               ...c,
               messages: c.messages
                 .filter((m) => !m.pending || m.text.length > 0)
-                .map((m) => ({ ...m, pending: false, revealFrom: undefined })),
+                .map((m) => ({ ...m, pending: false, revealFrom: undefined, tool: undefined })),
             })),
           }));
         }
@@ -291,6 +302,9 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
         remoteId: m.id,
         role: m.role,
         text: m.text,
+        // Spread rather than assigned: a reply that never searched has no `sources`,
+        // and writing `undefined` into the key would make the two indistinguishable.
+        ...(m.sources ? { sources: m.sources } : {}),
         // A reply still marked pending server-side was cut off, not still running.
         createdAt: m.createdAt,
       })),
@@ -362,6 +376,8 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       userMessageId?: string;
       prompt: string;
       model: ModelId;
+      /** Arms the web_search tool for this turn. */
+      search?: boolean;
       regenerateRemoteId?: string;
     }) => {
       const { conversationId, remoteConversationId, replyId, prompt, model } = args;
@@ -398,6 +414,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           conversationId: remoteConversationId,
           text: prompt,
           model,
+          ...(args.search ? { search: true } : {}),
           ...(args.regenerateRemoteId ? { regenerateMessageId: args.regenerateRemoteId } : {}),
           signal: controller.signal,
         })) {
@@ -417,6 +434,19 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
             case 'delta':
               text += event.text;
               reveal.push(text);
+              break;
+            case 'tool':
+              /*
+               * What the wait is actually for. The sources on a `reading` frame are
+               * kept as they arrive rather than waiting for `done`: the turn can be
+               * stopped or fail partway, and the pages it had already read are still
+               * the honest answer to "where did this come from".
+               */
+              patchMessage(conversationId, replyId, (m) => ({
+                ...m,
+                tool: { phase: event.phase, query: event.query },
+                ...(event.phase === 'reading' ? { sources: event.sources } : {}),
+              }));
               break;
             case 'done':
               /*
@@ -444,6 +474,15 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                     : event.message.text.length,
                 pending: false,
                 error: undefined,
+                // The tool is done being used; `sources` is what describes it now.
+                tool: undefined,
+                /*
+                 * The stored row's list wins over whatever the `reading` frames left,
+                 * because it is the deduped set across every pass. Absent means this
+                 * turn did not search, so the frames' copy stands rather than being
+                 * cleared.
+                 */
+                ...(event.message.sources ? { sources: event.message.sources } : {}),
               }));
               break;
             case 'error':
@@ -453,6 +492,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                 ...m,
                 text,
                 pending: false,
+                tool: undefined,
                 error: event.message,
               }));
               break;
@@ -465,13 +505,19 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
          */
         if (error instanceof AbortedError || controller.signal.aborted) {
           reveal.settle();
-          patchMessage(conversationId, replyId, (m) => ({ ...m, text, pending: false }));
+          patchMessage(conversationId, replyId, (m) => ({
+            ...m,
+            text,
+            pending: false,
+            tool: undefined,
+          }));
         } else {
           reveal.settle();
           patchMessage(conversationId, replyId, (m) => ({
             ...m,
             text,
             pending: false,
+            tool: undefined,
             error: error instanceof Error ? error.message : 'Something went wrong.',
           }));
         }
@@ -497,7 +543,14 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
    * cannot get there from here even if a future edit gets the flag wrong.
    */
   const runTemporaryStream = useCallback(
-    async (args: { replyId: string; prompt: string; history: TemporaryTurn[]; model: ModelId }) => {
+    async (args: {
+      replyId: string;
+      prompt: string;
+      history: TemporaryTurn[];
+      model: ModelId;
+      /** Arms the web_search tool for this turn. */
+      search?: boolean;
+    }) => {
       const { replyId, prompt, history, model } = args;
 
       const controller = new AbortController();
@@ -522,12 +575,21 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           text: prompt,
           model,
           history,
+          ...(args.search ? { search: true } : {}),
           signal: controller.signal,
         })) {
           switch (event.type) {
             case 'delta':
               text += event.text;
               reveal.push(text);
+              break;
+            case 'tool':
+              // Identical to the stored path: the frames are the same frames.
+              patchTemporaryMessage(replyId, (m) => ({
+                ...m,
+                tool: { phase: event.phase, query: event.query },
+                ...(event.phase === 'reading' ? { sources: event.sources } : {}),
+              }));
               break;
             case 'done':
               // No `remoteId` to adopt: there is no row. Otherwise identical to the
@@ -542,6 +604,13 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                 revealFrom: event.text === reveal.visible() ? revealedFrom : event.text.length,
                 pending: false,
                 error: undefined,
+                tool: undefined,
+                /*
+                 * Here the sources ride the `done` frame rather than a stored row --
+                 * there is no row -- so this is the only complete, deduped copy the
+                 * client will ever see of them.
+                 */
+                ...(event.sources ? { sources: event.sources } : {}),
               }));
               break;
             case 'error':
@@ -550,6 +619,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                 ...m,
                 text,
                 pending: false,
+                tool: undefined,
                 error: event.message,
               }));
               break;
@@ -560,12 +630,18 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
         if (error instanceof AbortedError || controller.signal.aborted) {
           // Stop was pressed. The partial text stays -- and unlike the stored path
           // there is no server copy for a reload to disagree with.
-          patchTemporaryMessage(replyId, (m) => ({ ...m, text, pending: false }));
+          patchTemporaryMessage(replyId, (m) => ({
+            ...m,
+            text,
+            pending: false,
+            tool: undefined,
+          }));
         } else {
           patchTemporaryMessage(replyId, (m) => ({
             ...m,
             text,
             pending: false,
+            tool: undefined,
             error: error instanceof Error ? error.message : 'Something went wrong.',
           }));
         }
@@ -606,9 +682,15 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
         { id: replyId, role: 'assistant', text: '', pending: true, createdAt: now + 1 },
       ]);
 
-      void runTemporaryStream({ replyId, prompt: text, history, model: state.model });
+      void runTemporaryStream({
+        replyId,
+        prompt: text,
+        history,
+        model: state.model,
+        search: webSearch,
+      });
     },
-    [clearTimer, runTemporaryStream, state.model, temporaryMessages],
+    [clearTimer, runTemporaryStream, state.model, temporaryMessages, webSearch],
   );
 
   /**
@@ -712,6 +794,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
             userMessageId: userMessage.id,
             prompt: text,
             model: state.model,
+            search: webSearch,
           });
         } catch (error) {
           // Creating the conversation failed, so the stream never started.
@@ -733,6 +816,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       state.activeId,
       state.model,
       temporary,
+      webSearch,
     ],
   );
 
@@ -768,10 +852,25 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
 
         setTemporaryMessages([
           ...priorTurns,
-          { ...target, text: '', revealFrom: 0, pending: true, error: undefined },
+          {
+            ...target,
+            text: '',
+            revealFrom: 0,
+            pending: true,
+            error: undefined,
+            // The previous attempt's citations describe text that is being replaced.
+            tool: undefined,
+            sources: undefined,
+          },
         ]);
 
-        void runTemporaryStream({ replyId: messageId, prompt, history, model: state.model });
+        void runTemporaryStream({
+          replyId: messageId,
+          prompt,
+          history,
+          model: state.model,
+          search: webSearch,
+        });
         return;
       }
 
@@ -811,6 +910,11 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
         revealFrom: 0,
         pending: true,
         error: undefined,
+        // Same reason as the temporary branch: the server clears the row's `sources`
+        // when it rewrites the reply, so holding the old list would be a lie until
+        // the new one arrives -- and a lie for good if this attempt does not search.
+        tool: undefined,
+        sources: undefined,
       }));
 
       /*
@@ -829,6 +933,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
         replyId: messageId,
         prompt,
         model: state.model,
+        search: webSearch,
         regenerateRemoteId: remoteMessageId,
       });
     },
@@ -842,6 +947,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       state.model,
       temporary,
       temporaryMessages,
+      webSearch,
     ],
   );
 
@@ -927,6 +1033,8 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       messages: temporary ? temporaryMessages : (active?.messages ?? []),
       temporary,
       setTemporary,
+      webSearch,
+      setWebSearch,
       visibleConversations: state.conversations.filter((c) => !c.archived),
       archivedConversations: state.conversations.filter((c) => c.archived),
       newConversation,
@@ -984,6 +1092,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     temporary,
     temporaryMessages,
     token,
+    webSearch,
   ]);
 
   return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>;

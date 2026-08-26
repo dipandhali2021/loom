@@ -23,10 +23,11 @@ import { useTheme } from '../theme/ThemeProvider';
 /**
  * The words, in the order the wait actually passes through.
  *
- * Deliberately vague past the first two. Nothing here can see what the model is
- * doing -- the route sends no progress frames, only deltas -- so a specific claim
- * ("Searching the web") would be an invention. These say "still working" in
- * different words, which is all that is honest and all the reader needs.
+ * Deliberately vague, and only used when there is nothing specific to say. A turn
+ * that calls a tool sends progress frames the store puts on the message, and the row
+ * passes those down as `label` -- so "Searching the web" is a fact when it appears
+ * rather than a guess. These are the fallback for the ordinary case, where all that
+ * is honestly known is that the request is out.
  */
 const WORDS = [
   'Thinking',
@@ -96,8 +97,13 @@ function Spinner({ color }: { color: string }) {
  * Unmounted by the row above as soon as there is text, so nothing here has to
  * coordinate with the reveal: it runs for exactly as long as there is nothing to
  * show.
+ *
+ * `label` overrides the cycling words with something known. While it is set the
+ * cycle stops rather than continuing underneath: a real description replaced two
+ * seconds later by "Almost there" would read as the search having finished, which is
+ * the opposite of what a still-open tool call means.
  */
-export function ThinkingIndicator() {
+export function ThinkingIndicator({ label }: { label?: string } = {}) {
   const { colors } = useTheme();
   const [index, setIndex] = useState(0);
 
@@ -151,11 +157,21 @@ export function ThinkingIndicator() {
       }, OUT_MS);
     };
 
+    if (label) {
+      /*
+       * A label arriving mid-swap would otherwise be stranded at whatever opacity the
+       * outgoing word was left at, so the fade is put back before bailing out.
+       */
+      fade.value = withTiming(1, { duration: IN_MS, easing: EASE_OUT });
+      slide.value = withTiming(0, { duration: IN_MS, easing: EASE_OUT });
+      return;
+    }
+
     timer.current = setTimeout(() => step(0), HOLD_MS);
     return () => {
       if (timer.current) clearTimeout(timer.current);
     };
-  }, [fade, slide]);
+  }, [fade, label, slide]);
 
   const word = useAnimatedStyle(() => ({
     opacity: fade.value * pulse.value,
@@ -170,7 +186,7 @@ export function ThinkingIndicator() {
       accessibilityRole="progressbar"
       // The label is fixed while the words are not: a live region announcing a new
       // synonym every two seconds would talk over the reply it is waiting for.
-      accessibilityLabel="Generating a reply"
+      accessibilityLabel={label ?? 'Generating a reply'}
     >
       <Animated.View style={ring}>
         <Spinner color={colors.labelSecondary} />
@@ -180,7 +196,7 @@ export function ThinkingIndicator() {
       <View style={styles.viewport}>
         <Animated.View style={word}>
           <AppText variant="thinking" tone="secondary" numberOfLines={1}>
-            {WORDS[index]}
+            {label ?? WORDS[index]}
           </AppText>
         </Animated.View>
       </View>

@@ -34,7 +34,13 @@ export type Block =
    * entry is a column the delimiter row left unaligned. Rows are ragged on
    * purpose -- mid-stream the last one is usually half-written.
    */
-  | { kind: 'table'; header: TableCell[]; rows: TableCell[][]; align: (Align | null)[]; start: number }
+  | {
+      kind: 'table';
+      header: TableCell[];
+      rows: TableCell[][];
+      align: (Align | null)[];
+      start: number;
+    }
   | { kind: 'rule'; start: number };
 
 export type Align = 'left' | 'center' | 'right';
@@ -50,7 +56,26 @@ export type ListItem = {
   start: number;
 };
 
-const ESCAPABLE = new Set(['\\', '`', '*', '_', '{', '}', '[', ']', '(', ')', '#', '+', '-', '.', '!', '>', '~', '|']);
+const ESCAPABLE = new Set([
+  '\\',
+  '`',
+  '*',
+  '_',
+  '{',
+  '}',
+  '[',
+  ']',
+  '(',
+  ')',
+  '#',
+  '+',
+  '-',
+  '.',
+  '!',
+  '>',
+  '~',
+  '|',
+]);
 
 const isSpace = (c: string | undefined) => c === undefined || c === ' ' || c === '\t' || c === '\n';
 const isWordChar = (c: string | undefined) => c !== undefined && /[\w]/.test(c);
@@ -97,9 +122,26 @@ function findRunClose(src: string, from: number, run: string): number {
 }
 
 function matchLink(src: string, i: number): { label: string; href: string; next: number } | null {
+  /*
+   * The first `]` is not always this `[`'s partner. A citation written `[[1]](url)`
+   * -- and models write that constantly -- closes an inner bracket first, and
+   * bailing there left the whole thing on screen as characters. So a `]` that is
+   * not followed by `(` is stepped over, but only when there is another `[` between
+   * here and it: that nested opener is what would have claimed it, which leaves this
+   * one still looking. Without that condition `[a] and [b](url)` would swallow the
+   * prose between the two and come out as one link.
+   */
   let close = src.indexOf(']', i + 1);
-  while (close !== -1 && isEscaped(src, close)) close = src.indexOf(']', close + 1);
-  if (close === -1 || src[close + 1] !== '(') return null;
+  while (close !== -1) {
+    if (isEscaped(src, close)) {
+      close = src.indexOf(']', close + 1);
+      continue;
+    }
+    if (src[close + 1] === '(') break;
+    if (!src.slice(i + 1, close).includes('[')) return null;
+    close = src.indexOf(']', close + 1);
+  }
+  if (close === -1) return null;
   const end = src.indexOf(')', close + 2);
   if (end === -1) return null;
   return { label: src.slice(i + 1, close), href: src.slice(close + 2, end).trim(), next: end + 1 };
@@ -155,7 +197,10 @@ export function parseInline(src: string, base = 0): InlineNode[] {
       flush();
       out.push({
         kind: pair === '~~' ? 'strike' : 'strong',
-        children: parseInline(close === -1 ? src.slice(i + 2) : src.slice(i + 2, close), base + i + 2),
+        children: parseInline(
+          close === -1 ? src.slice(i + 2) : src.slice(i + 2, close),
+          base + i + 2,
+        ),
         start: base + i,
       });
       i = close === -1 ? src.length : close + 2;
@@ -167,7 +212,10 @@ export function parseInline(src: string, base = 0): InlineNode[] {
       flush();
       out.push({
         kind: 'em',
-        children: parseInline(close === -1 ? src.slice(i + 1) : src.slice(i + 1, close), base + i + 1),
+        children: parseInline(
+          close === -1 ? src.slice(i + 1) : src.slice(i + 1, close),
+          base + i + 1,
+        ),
         start: base + i,
       });
       i = close === -1 ? src.length : close + 1;
@@ -229,7 +277,8 @@ function toLines(src: string): Line[] {
   return lines;
 }
 
-const listDepth = (indent: string) => Math.min(MAX_LIST_DEPTH, Math.floor(indent.replace(/\t/g, '  ').length / 2));
+const listDepth = (indent: string) =>
+  Math.min(MAX_LIST_DEPTH, Math.floor(indent.replace(/\t/g, '  ').length / 2));
 
 /** True when every line from `from` on is empty -- i.e. nothing has arrived yet. */
 const blankFrom = (lines: Line[], from: number) =>
@@ -377,7 +426,12 @@ export function parseMarkdown(src: string): Block[] {
         i += 1;
       }
       if (i < lines.length) i += 1;
-      blocks.push({ kind: 'code', text: body.join('\n'), lang: fence[2] || null, start: line.start });
+      blocks.push({
+        kind: 'code',
+        text: body.join('\n'),
+        lang: fence[2] || null,
+        start: line.start,
+      });
       continue;
     }
 
@@ -391,7 +445,12 @@ export function parseMarkdown(src: string): Block[] {
     if (heading) {
       const level = heading[1].length as 1 | 2 | 3 | 4 | 5 | 6;
       const at = line.start + line.text.indexOf(heading[2], heading[1].length);
-      blocks.push({ kind: 'heading', level, inline: parseInline(heading[2], at), start: line.start });
+      blocks.push({
+        kind: 'heading',
+        level,
+        inline: parseInline(heading[2], at),
+        start: line.start,
+      });
       i += 1;
       continue;
     }

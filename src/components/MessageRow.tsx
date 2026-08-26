@@ -5,7 +5,7 @@ import { ThinkingIndicator } from './ThinkingIndicator';
 import { MessageActions } from './MessageActions';
 import { Markdown } from './Markdown';
 import { useTheme } from '../theme/ThemeProvider';
-import { Message } from '../store/types';
+import { Message, ToolActivity } from '../store/types';
 import { layout, palette, type } from '../theme/tokens';
 
 /** Fades its children in once, so a turn arrives rather than snapping in. */
@@ -27,13 +27,44 @@ function FadeIn({ children, style }: { children: React.ReactNode; style?: object
         style,
         {
           opacity: enter,
-          transform: [{ translateY: enter.interpolate({ inputRange: [0, 1], outputRange: [6, 0] }) }],
+          transform: [
+            {
+              translateY: enter.interpolate({
+                inputRange: [0, 1],
+                outputRange: [6, 0],
+              }),
+            },
+          ],
         },
       ]}
     >
       {children}
     </Animated.View>
   );
+}
+
+/**
+ * What a tool call in flight is called on screen.
+ *
+ * The query is quoted rather than summarised: it is the model's own words, and it is
+ * the difference between "it is doing something" and knowing whether it understood
+ * the question -- a search for the wrong thing is visible here seconds before the
+ * wrong answer arrives. Long queries are cut rather than wrapped, because this line
+ * shares its box with the reply that is about to replace it.
+ */
+const QUERY_MAX = 42;
+
+function toolLabel(tool: ToolActivity): string {
+  const query = tool.query.trim();
+  const short =
+    query.length > QUERY_MAX ? `${query.slice(0, QUERY_MAX - 1).trimEnd()}\u2026` : query;
+
+  if (tool.phase === 'searching') {
+    return short ? `Searching for \u201c${short}\u201d` : 'Searching the web';
+  }
+  // Reading is the longer of the two waits -- a fetch per page -- so it says so
+  // plainly rather than reusing the search's wording and looking stuck.
+  return 'Reading the results';
 }
 
 /**
@@ -47,8 +78,13 @@ function MessageRowBase({ message }: { message: Message }) {
   const { colors } = useTheme();
   const isUser = message.role === 'user';
   const streaming = !isUser && !!message.pending;
-  // Nothing has arrived yet: the request is out but the model has not started.
-  const waiting = streaming && message.text.length === 0;
+  /*
+   * Show progress when there is nothing else to show -- but also whenever a tool is
+   * open, even under text already written. A pass can emit a sentence and then go
+   * looking something up, and on the text-only test that reply would sit there
+   * apparently finished for as long as the search took.
+   */
+  const waiting = streaming && (message.text.length === 0 || !!message.tool);
 
   if (isUser) {
     return (
@@ -56,12 +92,20 @@ function MessageRowBase({ message }: { message: Message }) {
         <View
           style={[
             styles.bubble,
-            { backgroundColor: colors.bubbleUser, borderColor: colors.bubbleUserBorder },
+            {
+              backgroundColor: colors.bubbleUser,
+              borderColor: colors.bubbleUserBorder,
+            },
           ]}
         >
           {/* The capsule is a light surface in both schemes, so its label takes
               its own colour rather than the page's primary label. */}
-          <AppText variant="chatBubble" tone="none" style={{ color: colors.bubbleUserText }} selectable>
+          <AppText
+            variant="chatBubble"
+            tone="none"
+            style={{ color: colors.bubbleUserText }}
+            selectable
+          >
             {message.text}
           </AppText>
         </View>
@@ -71,15 +115,29 @@ function MessageRowBase({ message }: { message: Message }) {
 
   return (
     <View style={styles.assistantRow}>
+      {/* Markdown rather than raw text: a reply is full of `##` and `**`, and
+          showing those as characters is what made it look unformatted. Each
+          part the reveal hands over fades in inside here. */}
+      {message.text.length > 0 ? (
+        <Markdown
+          text={message.text}
+          revealFrom={message.revealFrom}
+          /*
+           * Held back while it streams: the list grows as pages are read, and a
+           * link becoming a pill mid-sentence would re-wrap the paragraph the user
+           * is in the middle of. Once the turn is done every citation resolves at
+           * once, and the layout settles for good.
+           */
+          sources={streaming ? undefined : message.sources}
+        />
+      ) : null}
+
+      {/* Under the text, not instead of it: the tool call is the newest thing that
+          happened, so it belongs where the next tokens will appear. */}
       {waiting ? (
-        <View style={styles.waitWrap}>
-          <ThinkingIndicator />
+        <View style={[styles.waitWrap, message.text.length > 0 ? styles.waitAfterText : null]}>
+          <ThinkingIndicator label={message.tool ? toolLabel(message.tool) : undefined} />
         </View>
-      ) : message.text.length > 0 ? (
-        /* Markdown rather than raw text: a reply is full of `##` and `**`, and
-           showing those as characters is what made it look unformatted. Each
-           part the reveal hands over fades in inside here. */
-        <Markdown text={message.text} revealFrom={message.revealFrom} />
       ) : null}
 
       {/* A turn that failed says so in place, rather than leaving a blank row. */}
@@ -89,10 +147,13 @@ function MessageRowBase({ message }: { message: Message }) {
         </AppText>
       ) : null}
 
-      {/* The action row only appears once the reply has finished landing. */}
+      {/* The action row only appears once the reply has finished landing. The
+          sources live inside it rather than in a block of their own: the pills in
+          the prose already say which sentence came from where, so all that is left
+          is a way to the full list. */}
       {!streaming && message.text.length > 0 ? (
         <FadeIn>
-          <MessageActions messageId={message.id} text={message.text} />
+          <MessageActions messageId={message.id} text={message.text} sources={message.sources} />
         </FadeIn>
       ) : null}
     </View>
@@ -130,5 +191,8 @@ const styles = StyleSheet.create({
   // One line of chat body, so the indicator occupies exactly the room the first
   // line of the reply will, and nothing shifts when it is replaced by text.
   waitWrap: { minHeight: 25, justifyContent: 'center' },
+  // Only when it follows text, so the indicator alone still sits flush with the top
+  // of the row where the first line of the reply will land.
+  waitAfterText: { marginTop: 6 },
   error: { marginTop: 4 },
 });

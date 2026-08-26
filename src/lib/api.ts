@@ -101,11 +101,24 @@ async function request<T>(
 
 // --- DTOs, mirroring server/src/dto.ts --------------------------------------
 
+/** One web page a reply cited. Mirrors `SourceDTO` in server/src/dto.ts. */
+export type ApiSource = {
+  title: string;
+  url: string;
+  /** Host as the provider displays it, which is what the chip shows. */
+  displayUrl: string;
+  publishedAt: string | null;
+  /** Whether the page body was read, or only its link was found. */
+  fetched: boolean;
+};
+
 export type ApiMessage = {
   id: string;
   role: 'user' | 'assistant';
   text: string;
   pending?: boolean;
+  /** Present only on a reply that searched the web. */
+  sources?: ApiSource[];
   createdAt: number;
 };
 
@@ -179,11 +192,24 @@ export const runCode = (
 
 // --- Streaming completion ---------------------------------------------------
 
+/**
+ * Progress while the server is using a tool, so the waiting state can say what is
+ * happening instead of guessing.
+ *
+ * Two phases rather than one: a search and the page reads after it are seconds apart,
+ * and "Searching the web" left on screen through both would go stale exactly when the
+ * wait is longest.
+ */
+export type ToolEvent =
+  | { type: 'tool'; phase: 'searching'; query: string }
+  | { type: 'tool'; phase: 'reading'; query: string; sources: ApiSource[] };
+
 /** The event frames server/src/routes/completions.ts emits. */
 export type CompletionEvent =
   | { type: 'user'; message: ApiMessage }
   | { type: 'assistant'; id: string }
   | { type: 'delta'; text: string }
+  | ToolEvent
   | { type: 'done'; message: ApiMessage; finishReason: string | null }
   | { type: 'error'; message: string; messageId: string };
 
@@ -197,7 +223,8 @@ export type CompletionEvent =
  */
 export type TemporaryEvent =
   | { type: 'delta'; text: string }
-  | { type: 'done'; text: string; finishReason: string | null }
+  | ToolEvent
+  | { type: 'done'; text: string; finishReason: string | null; sources?: ApiSource[] }
   | { type: 'error'; message: string };
 
 /** One prior turn of a temporary chat, replayed from the client's own copy. */
@@ -294,6 +321,7 @@ export async function* streamCompletion({
   conversationId,
   text,
   model,
+  search,
   regenerateMessageId,
   signal,
 }: {
@@ -301,6 +329,8 @@ export async function* streamCompletion({
   conversationId: string;
   text: string;
   model: string;
+  /** Let the model search the web for this turn. The composer's switch. */
+  search?: boolean;
   /** Rewrite this assistant message instead of appending a new turn. */
   regenerateMessageId?: string;
   signal?: AbortSignal;
@@ -308,7 +338,12 @@ export async function* streamCompletion({
   const body = await openEventStream({
     path: `/api/v1/conversations/${conversationId}/completions`,
     getToken,
-    body: { text, model, ...(regenerateMessageId ? { regenerateMessageId } : {}) },
+    body: {
+      text,
+      model,
+      ...(search ? { search: true } : {}),
+      ...(regenerateMessageId ? { regenerateMessageId } : {}),
+    },
     signal,
   });
   yield* readEvents<CompletionEvent>(body, signal);
@@ -327,18 +362,21 @@ export async function* streamTemporaryCompletion({
   text,
   model,
   history,
+  search,
   signal,
 }: {
   getToken: GetToken;
   text: string;
   model: string;
   history: TemporaryTurn[];
+  /** Let the model search the web for this turn. The composer's switch. */
+  search?: boolean;
   signal?: AbortSignal;
 }): AsyncGenerator<TemporaryEvent> {
   const body = await openEventStream({
     path: '/api/v1/temporary/completions',
     getToken,
-    body: { text, model, history },
+    body: { text, model, history, ...(search ? { search: true } : {}) },
     signal,
   });
   yield* readEvents<TemporaryEvent>(body, signal);

@@ -1,4 +1,19 @@
+import type { ApiSource } from '../lib/api';
+
 export type Role = 'user' | 'assistant';
+
+/**
+ * What the server is doing with a tool right now, while the reply is still open.
+ *
+ * Held on the message rather than in one store-level slot: a turn's progress belongs
+ * to that turn, so a reply left mid-search by a navigation still shows what it was
+ * doing when it is scrolled back to.
+ */
+export type ToolActivity = {
+  phase: 'searching' | 'reading';
+  /** The query the model wrote, shown as-is -- it is the most specific thing we have. */
+  query: string;
+};
 
 export type Message = {
   id: string;
@@ -20,6 +35,16 @@ export type Message = {
   pending?: boolean;
   /** Set when the turn failed, so the row can show what went wrong. */
   error?: string;
+  /**
+   * The tool call in flight. Present only while `pending`, and cleared when the turn
+   * finishes -- a finished reply's tool use is described by `sources`, not by this.
+   */
+  tool?: ToolActivity;
+  /**
+   * Pages this reply searched and read. Absent on a turn that did not search, which
+   * is not the same as an empty array: `[]` would mean a search that found nothing.
+   */
+  sources?: ApiSource[];
   createdAt: number;
 };
 
