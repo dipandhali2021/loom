@@ -16,6 +16,13 @@ type Props = {
   /** Controlled draft text, so a tapped prompt chip can pre-fill the field. */
   value: string;
   onChangeText: (next: string) => void;
+  /**
+   * Naming the mode in the field itself, the way the app does: "Temporary chat"
+   * while one is open, "Ask anything" otherwise. It is the only label on screen once
+   * the first turn has scrolled the explanation away, so it is what a user coming
+   * back to the app reads to know nothing here is being kept.
+   */
+  placeholder?: string;
 };
 
 /**
@@ -31,6 +38,7 @@ export function Composer({
   isStreaming = false,
   value: text,
   onChangeText: setText,
+  placeholder = 'Ask anything',
 }: Props) {
   const { colors } = useTheme();
   const { hapticsEnabled } = useChatStore();
@@ -53,10 +61,22 @@ export function Composer({
 
   // One button, three jobs — the kit draws all three as the same black circle.
   const action = isStreaming
-    ? { label: 'Stop generating', onPress: onStop, glyph: <MaterialIcons name="stop" size={20} color={colors.sendGlyph} /> }
+    ? {
+        label: 'Stop generating',
+        onPress: onStop,
+        glyph: <MaterialIcons name="stop" size={20} color={colors.sendGlyph} />,
+      }
     : hasText
-      ? { label: 'Send message', onPress: submit, glyph: <Feather name="arrow-up" size={20} color={colors.sendGlyph} /> }
-      : { label: 'Voice conversation', onPress: onOpenVoice, glyph: <MaterialIcons name="graphic-eq" size={20} color={colors.sendGlyph} /> };
+      ? {
+          label: 'Send message',
+          onPress: submit,
+          glyph: <Feather name="arrow-up" size={20} color={colors.sendGlyph} />,
+        }
+      : {
+          label: 'Voice conversation',
+          onPress: onOpenVoice,
+          glyph: <MaterialIcons name="graphic-eq" size={20} color={colors.sendGlyph} />,
+        };
 
   return (
     <View style={styles.row}>
@@ -74,12 +94,12 @@ export function Composer({
         <TextInput
           value={text}
           onChangeText={setText}
-          placeholder="Ask anything"
+          placeholder={placeholder}
           placeholderTextColor={colors.labelTertiary}
           style={[typeTokens.composer, styles.input, { color: colors.labelPrimary }]}
           multiline
           returnKeyType="default"
-          accessibilityLabel="Ask anything"
+          accessibilityLabel={placeholder}
         />
 
         <Pressable

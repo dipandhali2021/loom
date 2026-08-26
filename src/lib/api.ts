@@ -58,7 +58,10 @@ async function authorize(getToken: GetToken): Promise<Record<string, string>> {
  * A body that is not the expected JSON (a proxy's HTML 502, say) falls back to
  * something a person can read.
  */
-async function toApiError(response: { status: number; text: () => Promise<string> }): Promise<ApiError> {
+async function toApiError(response: {
+  status: number;
+  text: () => Promise<string>;
+}): Promise<ApiError> {
   const raw = await response.text().catch(() => '');
   let parsed: ErrorBody | null = null;
   try {
@@ -131,9 +134,10 @@ export const listConversations = (getToken: GetToken) =>
   );
 
 export const getConversation = (getToken: GetToken, conversationId: string) =>
-  request<{ conversation: ApiConversation }>(`/api/v1/conversations/${conversationId}`, getToken).then(
-    (body) => body.conversation,
-  );
+  request<{ conversation: ApiConversation }>(
+    `/api/v1/conversations/${conversationId}`,
+    getToken,
+  ).then((body) => body.conversation);
 
 export const createConversation = (getToken: GetToken, title?: string) =>
   request<{ conversation: ApiConversation }>('/api/v1/conversations', getToken, {
@@ -170,7 +174,8 @@ export type RunResult = {
 export const runCode = (
   getToken: GetToken,
   { code, lang, signal }: { code: string; lang: string; signal?: AbortSignal },
-) => request<RunResult>('/api/v1/execute', getToken, { method: 'POST', body: { code, lang }, signal });
+) =>
+  request<RunResult>('/api/v1/execute', getToken, { method: 'POST', body: { code, lang }, signal });
 
 // --- Streaming completion ---------------------------------------------------
 
@@ -183,49 +188,33 @@ export type CompletionEvent =
   | { type: 'error'; message: string; messageId: string };
 
 /**
- * Posts a turn and yields each event as it arrives.
+ * The event frames server/src/routes/temporary.ts emits.
  *
- * A generator rather than a callback bag so the caller drives consumption with a
- * plain `for await`, and abandoning the loop tears the request down.
+ * A narrower set than above, and deliberately not the same type: the `user` and
+ * `assistant` frames exist only to hand over the ids of rows the server stored, and
+ * a temporary turn stores none -- so `done` carries the text alone and there is no
+ * `message.id` for a caller to reach for.
  */
-export async function* streamCompletion({
-  getToken,
-  conversationId,
-  text,
-  model,
-  regenerateMessageId,
-  signal,
-}: {
-  getToken: GetToken;
-  conversationId: string;
-  text: string;
-  model: string;
-  /** Rewrite this assistant message instead of appending a new turn. */
-  regenerateMessageId?: string;
-  signal?: AbortSignal;
-}): AsyncGenerator<CompletionEvent> {
-  const response = await fetch(
-    `${requireBaseUrl()}/api/v1/conversations/${conversationId}/completions`,
-    {
-      method: 'POST',
-      headers: {
-        ...(await authorize(getToken)),
-        'Content-Type': 'application/json',
-        Accept: 'text/event-stream',
-      },
-      body: JSON.stringify({
-        text,
-        model,
-        ...(regenerateMessageId ? { regenerateMessageId } : {}),
-      }),
-      signal: signal ?? null,
-    },
-  );
+export type TemporaryEvent =
+  | { type: 'delta'; text: string }
+  | { type: 'done'; text: string; finishReason: string | null }
+  | { type: 'error'; message: string };
 
-  if (!response.ok) throw await toApiError(response);
-  if (!response.body) throw new ApiError(502, 'no_body', 'The server sent no response body.');
+/** One prior turn of a temporary chat, replayed from the client's own copy. */
+export type TemporaryTurn = { role: 'user' | 'assistant'; text: string };
 
-  const reader = response.body.getReader();
+/**
+ * Yields each `data:` frame of an SSE body, parsed.
+ *
+ * Shared by both streaming calls below. Generic in the frame type rather than
+ * returning `unknown`: the two routes emit different sets, and the caller knowing
+ * which is what keeps the switch statements exhaustive.
+ */
+async function* readEvents<Event>(
+  body: ReadableStream<Uint8Array>,
+  signal?: AbortSignal,
+): AsyncGenerator<Event> {
+  const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
 
@@ -249,7 +238,7 @@ export async function* streamCompletion({
           const payload = line.slice(5).trim();
           if (!payload) continue;
           try {
-            yield JSON.parse(payload) as CompletionEvent;
+            yield JSON.parse(payload) as Event;
           } catch {
             // Skip a frame we cannot parse rather than abandoning the stream.
           }
@@ -264,4 +253,93 @@ export async function* streamCompletion({
     // Releases the native connection whether the caller finished or bailed out.
     await reader.cancel().catch(() => {});
   }
+}
+
+/** POSTs an event-stream request and hands back its body, or throws. */
+async function openEventStream({
+  path,
+  getToken,
+  body,
+  signal,
+}: {
+  path: string;
+  getToken: GetToken;
+  body: unknown;
+  signal?: AbortSignal;
+}): Promise<ReadableStream<Uint8Array>> {
+  const response = await fetch(`${requireBaseUrl()}${path}`, {
+    method: 'POST',
+    headers: {
+      ...(await authorize(getToken)),
+      'Content-Type': 'application/json',
+      Accept: 'text/event-stream',
+    },
+    body: JSON.stringify(body),
+    signal: signal ?? null,
+  });
+
+  if (!response.ok) throw await toApiError(response);
+  if (!response.body) throw new ApiError(502, 'no_body', 'The server sent no response body.');
+  return response.body;
+}
+
+/**
+ * Posts a turn and yields each event as it arrives.
+ *
+ * A generator rather than a callback bag so the caller drives consumption with a
+ * plain `for await`, and abandoning the loop tears the request down.
+ */
+export async function* streamCompletion({
+  getToken,
+  conversationId,
+  text,
+  model,
+  regenerateMessageId,
+  signal,
+}: {
+  getToken: GetToken;
+  conversationId: string;
+  text: string;
+  model: string;
+  /** Rewrite this assistant message instead of appending a new turn. */
+  regenerateMessageId?: string;
+  signal?: AbortSignal;
+}): AsyncGenerator<CompletionEvent> {
+  const body = await openEventStream({
+    path: `/api/v1/conversations/${conversationId}/completions`,
+    getToken,
+    body: { text, model, ...(regenerateMessageId ? { regenerateMessageId } : {}) },
+    signal,
+  });
+  yield* readEvents<CompletionEvent>(body, signal);
+}
+
+/**
+ * Posts a turn to the temporary route, which stores nothing.
+ *
+ * `history` is the whole context the reply gets: there is no conversation row for
+ * the server to read earlier turns from, so the client's own copy is it. Nothing
+ * here carries a conversation id, because a temporary chat never has one -- which
+ * is also what makes it impossible for this call to write to the wrong one.
+ */
+export async function* streamTemporaryCompletion({
+  getToken,
+  text,
+  model,
+  history,
+  signal,
+}: {
+  getToken: GetToken;
+  text: string;
+  model: string;
+  history: TemporaryTurn[];
+  signal?: AbortSignal;
+}): AsyncGenerator<TemporaryEvent> {
+  const body = await openEventStream({
+    path: '/api/v1/temporary/completions',
+    getToken,
+    body: { text, model, history },
+    signal,
+  });
+  yield* readEvents<TemporaryEvent>(body, signal);
 }

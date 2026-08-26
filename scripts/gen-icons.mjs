@@ -9,6 +9,7 @@ const MONO = new Set([
   'phone-01','mail-01','plus-square','refresh-cw','archive','book-closed','xmark',
   'recording-01','message-check','flag-06','volume-max','check','mail','mail-big','logo-dot',
   'loading-dot','apple','chevron-left','check-small','gpt35-badge','gpt4-badge',
+  'temporary-chat','temporary-chat-on',
 ]);
 
 const out = [];

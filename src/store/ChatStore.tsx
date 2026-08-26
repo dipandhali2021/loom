@@ -1,4 +1,12 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '@clerk/expo';
 import { Conversation, Message, ModelId, VoiceName } from './types';
@@ -11,11 +19,22 @@ import {
   getConversation,
   listConversations,
   streamCompletion,
+  streamTemporaryCompletion,
   type ApiConversation,
   type GetToken,
+  type TemporaryTurn,
 } from '../lib/api';
 import { useEmailOtpAuth } from '../auth/useEmailOtpAuth';
 import { createReveal } from '../lib/reveal';
+
+/**
+ * How many prior turns of a temporary chat are replayed upstream.
+ *
+ * Must not exceed the cap the temporary route validates against, or a long temporary
+ * chat starts failing with a 400 instead of just losing its oldest context. It is the
+ * same bound the stored path applies from its own table (HISTORY_LIMIT there).
+ */
+const TEMPORARY_HISTORY_LIMIT = 30;
 
 /*
  * Bumped from v1: `signedIn` / `emailVerified` / `email` used to be persisted here.
@@ -46,6 +65,19 @@ type ChatStoreValue = PersistedState & {
   /** Signed-in user's primary address, or the address a pending code went to. */
   email: string | null;
   active: Conversation | null;
+  /**
+   * The turns on screen: the active conversation's, or the temporary chat's while
+   * one is open. The chat screen reads this rather than `active.messages` so it
+   * never has to know which mode it is in.
+   */
+  messages: Message[];
+  /**
+   * A temporary chat is open. Nothing said in it is written to the database, to
+   * AsyncStorage, or to the conversation list.
+   */
+  temporary: boolean;
+  /** Opens or closes the temporary chat. Closing discards its turns. */
+  setTemporary: (on: boolean) => void;
   /** Conversations shown in the drawer (archived ones excluded). */
   visibleConversations: Conversation[];
   archivedConversations: Conversation[];
@@ -97,6 +129,20 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<PersistedState>(initialState);
   const [storageHydrated, setStorageHydrated] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
+
+  /*
+   * The temporary chat, held outside `state` on purpose.
+   *
+   * `state` is what the effect below serialises into AsyncStorage on every change,
+   * so a temporary turn kept in there would be on disk within a frame of being
+   * typed. Two separate useStates is what makes "not stored" structural rather than
+   * something an `if` in the persistence effect has to remember: there is no path
+   * from here to storage at all. The server side is the same shape -- the temporary
+   * route writes no rows -- so a temporary chat exists only in memory, and only
+   * until this component unmounts.
+   */
+  const [temporary, setTemporaryOpen] = useState(false);
+  const [temporaryMessages, setTemporaryMessages] = useState<Message[]>([]);
   /** Aborts the in-flight turn: the Stop button, a new send, or an unmount. */
   const streamAbort = useRef<AbortController | null>(null);
 
@@ -186,7 +232,9 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
 
           return {
             ...prev,
-            conversations: [...prev.conversations, ...missing].sort((a, b) => b.updatedAt - a.updatedAt),
+            conversations: [...prev.conversations, ...missing].sort(
+              (a, b) => b.updatedAt - a.updatedAt,
+            ),
           };
         });
       })
@@ -213,6 +261,14 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     const id = createId('conv');
     const now = Date.now();
     clearTimer();
+    /*
+     * A new stored chat closes the temporary one. Both routes here -- the navbar's
+     * compose button and the drawer -- mean "start a conversation I will keep", and
+     * leaving temporary mode on would show the new chat's screen while sends went to
+     * the route that stores nothing.
+     */
+    setTemporaryMessages([]);
+    setTemporaryOpen(false);
     setState((prev) => ({
       ...prev,
       activeId: id,
@@ -242,12 +298,15 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       updatedAt: remote.updatedAt,
       archived: false,
     }),
-    []
+    [],
   );
 
   const openConversation = useCallback(
     (id: string) => {
       clearTimer();
+      // Opening a stored conversation leaves temporary mode, for the same reason.
+      setTemporaryMessages([]);
+      setTemporaryOpen(false);
       setState((prev) => ({ ...prev, activeId: id }));
 
       /*
@@ -269,7 +328,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           console.warn('[chat] could not load the conversation', error);
         });
     },
-    [clearTimer, fromApi, patchConversation, token]
+    [clearTimer, fromApi, patchConversation, token],
   );
 
   /** Rewrites one message in one conversation. The unit every stream update uses. */
@@ -280,7 +339,14 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
         updatedAt: Date.now(),
         messages: c.messages.map((m) => (m.id === messageId ? fn(m) : m)),
       })),
-    [patchConversation]
+    [patchConversation],
+  );
+
+  /** `patchMessage` for the temporary chat, which has no conversation to look up. */
+  const patchTemporaryMessage = useCallback(
+    (messageId: string, fn: (m: Message) => Message) =>
+      setTemporaryMessages((prev) => prev.map((m) => (m.id === messageId ? fn(m) : m))),
+    [],
   );
 
   /**
@@ -316,18 +382,15 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       // Where the last part started, so finishing the turn can leave it fading
       // rather than snapping it to full strength.
       let revealedFrom = 0;
-      const reveal = createReveal(
-        (visible, from) => {
-          revealedFrom = from;
-          patchMessage(conversationId, replyId, (m) => ({
-            ...m,
-            text: visible,
-            revealFrom: from,
-            pending: true,
-          }));
-        },
-        controller.signal,
-      );
+      const reveal = createReveal((visible, from) => {
+        revealedFrom = from;
+        patchMessage(conversationId, replyId, (m) => ({
+          ...m,
+          text: visible,
+          revealFrom: from,
+          pending: true,
+        }));
+      }, controller.signal);
 
       try {
         for await (const event of streamCompletion({
@@ -375,7 +438,10 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                  * animating span and snap the last words in. If the server's copy
                  * differs from what was revealed there is nothing to preserve.
                  */
-                revealFrom: event.message.text === reveal.visible() ? revealedFrom : event.message.text.length,
+                revealFrom:
+                  event.message.text === reveal.visible()
+                    ? revealedFrom
+                    : event.message.text.length,
                 pending: false,
                 error: undefined,
               }));
@@ -418,7 +484,131 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
         }
       }
     },
-    [patchMessage, token]
+    [patchMessage, token],
+  );
+
+  /**
+   * The temporary chat's equivalent of `runStream`.
+   *
+   * Written out rather than folded into `runStream` behind a flag. The two differ in
+   * the endpoint, the frames it emits, where the history comes from and which setter
+   * the deltas land in -- and the one thing that must never happen by accident is a
+   * temporary turn reaching the persisting path. Separate functions mean the store
+   * cannot get there from here even if a future edit gets the flag wrong.
+   */
+  const runTemporaryStream = useCallback(
+    async (args: { replyId: string; prompt: string; history: TemporaryTurn[]; model: ModelId }) => {
+      const { replyId, prompt, history, model } = args;
+
+      const controller = new AbortController();
+      streamAbort.current = controller;
+      setIsStreaming(true);
+
+      let text = '';
+      let revealedFrom = 0;
+      const reveal = createReveal((visible, from) => {
+        revealedFrom = from;
+        patchTemporaryMessage(replyId, (m) => ({
+          ...m,
+          text: visible,
+          revealFrom: from,
+          pending: true,
+        }));
+      }, controller.signal);
+
+      try {
+        for await (const event of streamTemporaryCompletion({
+          getToken: token,
+          text: prompt,
+          model,
+          history,
+          signal: controller.signal,
+        })) {
+          switch (event.type) {
+            case 'delta':
+              text += event.text;
+              reveal.push(text);
+              break;
+            case 'done':
+              // No `remoteId` to adopt: there is no row. Otherwise identical to the
+              // stored path, including letting the reveal drain before settling, so
+              // the last words fade in rather than snapping.
+              text = event.text;
+              reveal.push(text);
+              await reveal.finish();
+              patchTemporaryMessage(replyId, (m) => ({
+                ...m,
+                text: event.text,
+                revealFrom: event.text === reveal.visible() ? revealedFrom : event.text.length,
+                pending: false,
+                error: undefined,
+              }));
+              break;
+            case 'error':
+              reveal.settle();
+              patchTemporaryMessage(replyId, (m) => ({
+                ...m,
+                text,
+                pending: false,
+                error: event.message,
+              }));
+              break;
+          }
+        }
+      } catch (error) {
+        reveal.settle();
+        if (error instanceof AbortedError || controller.signal.aborted) {
+          // Stop was pressed. The partial text stays -- and unlike the stored path
+          // there is no server copy for a reload to disagree with.
+          patchTemporaryMessage(replyId, (m) => ({ ...m, text, pending: false }));
+        } else {
+          patchTemporaryMessage(replyId, (m) => ({
+            ...m,
+            text,
+            pending: false,
+            error: error instanceof Error ? error.message : 'Something went wrong.',
+          }));
+        }
+      } finally {
+        reveal.cancel();
+        if (streamAbort.current === controller) {
+          streamAbort.current = null;
+          setIsStreaming(false);
+        }
+      }
+    },
+    [patchTemporaryMessage, token],
+  );
+
+  /**
+   * One turn of a temporary chat.
+   *
+   * The history sent upstream is read from the state *before* this turn is appended,
+   * and only from completed turns: a pending assistant row is the empty placeholder
+   * this send just made, and replaying it would put a blank assistant message in the
+   * prompt.
+   */
+  const sendTemporaryMessage = useCallback(
+    (text: string) => {
+      clearTimer();
+
+      const history: TemporaryTurn[] = temporaryMessages
+        .filter((m) => !m.pending && !m.error && m.text.trim().length > 0)
+        .slice(-TEMPORARY_HISTORY_LIMIT)
+        .map((m) => ({ role: m.role, text: m.text }));
+
+      const now = Date.now();
+      const userMessage: Message = { id: createId('msg'), role: 'user', text, createdAt: now };
+      const replyId = createId('msg');
+      setTemporaryMessages((prev) => [
+        ...prev,
+        userMessage,
+        { id: replyId, role: 'assistant', text: '', pending: true, createdAt: now + 1 },
+      ]);
+
+      void runTemporaryStream({ replyId, prompt: text, history, model: state.model });
+    },
+    [clearTimer, runTemporaryStream, state.model, temporaryMessages],
   );
 
   /**
@@ -429,20 +619,32 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
    */
   const ensureRemoteConversation = useCallback(
     async (conversationId: string, title: string): Promise<string> => {
-      const existing = stateRef.current.conversations.find((c) => c.id === conversationId)?.remoteId;
+      const existing = stateRef.current.conversations.find(
+        (c) => c.id === conversationId,
+      )?.remoteId;
       if (existing) return existing;
 
       const remote = await createConversation(token, title);
       patchConversation(conversationId, (c) => ({ ...c, remoteId: remote.id }));
       return remote.id;
     },
-    [patchConversation, token]
+    [patchConversation, token],
   );
 
   const sendMessage = useCallback(
     (rawText: string) => {
       const text = rawText.trim();
       if (!text) return;
+      /*
+       * The fork for temporary mode is here, at the top, before anything touches
+       * `state`. Everything below this line writes a conversation and a pair of
+       * messages into persisted state; there is no version of that which is safe for
+       * a temporary turn, so it never reaches it.
+       */
+      if (temporary) {
+        sendTemporaryMessage(text);
+        return;
+      }
       clearTimer();
 
       const now = Date.now();
@@ -467,7 +669,14 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
         if (!activeId || !conversations.some((c) => c.id === activeId)) {
           activeId = createId('conv');
           conversations = [
-            { id: activeId, title: 'New chat', messages: [], createdAt: now, updatedAt: now, archived: false },
+            {
+              id: activeId,
+              title: 'New chat',
+              messages: [],
+              createdAt: now,
+              updatedAt: now,
+              archived: false,
+            },
             ...conversations,
           ];
         }
@@ -515,13 +724,60 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
         }
       })();
     },
-    [clearTimer, ensureRemoteConversation, patchMessage, runStream, state.activeId, state.model]
+    [
+      clearTimer,
+      ensureRemoteConversation,
+      patchMessage,
+      runStream,
+      sendTemporaryMessage,
+      state.activeId,
+      state.model,
+      temporary,
+    ],
   );
 
   const regenerate = useCallback(
     (messageId: string) => {
       clearTimer();
-      const conversation = state.conversations.find((c) => c.messages.some((m) => m.id === messageId));
+
+      /*
+       * A temporary reply is re-asked rather than rewritten: the server has no row to
+       * update, so there is no `regenerateMessageId` to send. Trimming the local list
+       * back to the question and streaming again produces the same result the stored
+       * path gets from the server dropping the turns after it.
+       */
+      if (temporary) {
+        const index = temporaryMessages.findIndex((m) => m.id === messageId);
+        const target = temporaryMessages[index];
+        if (!target || target.role !== 'assistant') return;
+
+        const priorTurns = temporaryMessages.slice(0, index);
+        // The question this reply belongs to, found by walking back rather than
+        // assuming it is the row directly above -- which it is today, and need not be.
+        const askedAt = priorTurns.map((m) => m.role).lastIndexOf('user');
+        if (askedAt === -1) return;
+        const prompt = priorTurns[askedAt].text;
+
+        // Everything before that question, which is the same cutoff the server applies
+        // to its own history when rewriting a stored reply.
+        const history: TemporaryTurn[] = priorTurns
+          .slice(0, askedAt)
+          .filter((m) => !m.pending && !m.error && m.text.trim().length > 0)
+          .slice(-TEMPORARY_HISTORY_LIMIT)
+          .map((m) => ({ role: m.role, text: m.text }));
+
+        setTemporaryMessages([
+          ...priorTurns,
+          { ...target, text: '', revealFrom: 0, pending: true, error: undefined },
+        ]);
+
+        void runTemporaryStream({ replyId: messageId, prompt, history, model: state.model });
+        return;
+      }
+
+      const conversation = state.conversations.find((c) =>
+        c.messages.some((m) => m.id === messageId),
+      );
       if (!conversation) return;
 
       const index = conversation.messages.findIndex((m) => m.id === messageId);
@@ -529,7 +785,9 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       if (!target || target.role !== 'assistant') return;
 
       // Re-answer the user turn this reply belongs to.
-      const prompt = [...conversation.messages.slice(0, index)].reverse().find((m) => m.role === 'user')?.text;
+      const prompt = [...conversation.messages.slice(0, index)]
+        .reverse()
+        .find((m) => m.role === 'user')?.text;
       if (!prompt) return;
 
       /*
@@ -574,7 +832,17 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
         regenerateRemoteId: remoteMessageId,
       });
     },
-    [clearTimer, patchConversation, patchMessage, runStream, state.conversations, state.model]
+    [
+      clearTimer,
+      patchConversation,
+      patchMessage,
+      runStream,
+      runTemporaryStream,
+      state.conversations,
+      state.model,
+      temporary,
+      temporaryMessages,
+    ],
   );
 
   const stopStreaming = useCallback(() => {
@@ -586,7 +854,29 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
         messages: c.messages.map((m) => (m.pending ? { ...m, pending: false } : m)),
       })),
     }));
+    // Unconditional: the temporary list is empty unless a temporary chat is open, so
+    // this costs nothing when one is not, and forgetting it would leave a stopped
+    // temporary reply showing the thinking dots for ever.
+    setTemporaryMessages((prev) => prev.map((m) => (m.pending ? { ...m, pending: false } : m)));
   }, [clearTimer]);
+
+  /**
+   * Opens or closes the temporary chat.
+   *
+   * Closing discards its turns rather than keeping them for the next time it is
+   * opened: they were never written anywhere, and a temporary chat that came back
+   * with yesterday's conversation still in it would not be one.
+   */
+  const setTemporary = useCallback(
+    (on: boolean) => {
+      // A reply mid-flight belongs to whichever mode is being left; let it go rather
+      // than streaming into a list that is no longer on screen.
+      clearTimer();
+      setTemporaryMessages([]);
+      setTemporaryOpen(on);
+    },
+    [clearTimer],
+  );
 
   const deleteConversation = useCallback(
     (id: string) => {
@@ -613,12 +903,12 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
         };
       });
     },
-    [clearTimer, token]
+    [clearTimer, token],
   );
 
   const setArchived = useCallback(
     (id: string, archived: boolean) => patchConversation(id, (c) => ({ ...c, archived })),
-    [patchConversation]
+    [patchConversation],
   );
 
   const value = useMemo<ChatStoreValue>(() => {
@@ -634,6 +924,9 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       email: pendingEmail,
       isStreaming,
       active,
+      messages: temporary ? temporaryMessages : (active?.messages ?? []),
+      temporary,
+      setTemporary,
       visibleConversations: state.conversations.filter((c) => !c.archived),
       archivedConversations: state.conversations.filter((c) => c.archived),
       newConversation,
@@ -655,6 +948,8 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
          * account actually owns. They remain on the server either way.
          */
         setState((prev) => ({ ...prev, conversations: [], activeId: null }));
+        setTemporaryMessages([]);
+        setTemporaryOpen(false);
         /*
          * Two different exits share this button: a verified user ends a real
          * session, while someone who never entered their code only has a local
@@ -683,8 +978,11 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     regenerate,
     sendMessage,
     setArchived,
+    setTemporary,
     state,
     stopStreaming,
+    temporary,
+    temporaryMessages,
     token,
   ]);
 

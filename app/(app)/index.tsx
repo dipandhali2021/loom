@@ -13,11 +13,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NavBar } from '../../src/components/NavBar';
 import { Composer } from '../../src/components/Composer';
 import { MessageRow } from '../../src/components/MessageRow';
-import { PromptExamples, PromptExample } from '../../src/components/PromptExamples';
 import { ModelPicker } from '../../src/components/ModelPicker';
 import { HistoryDrawer } from '../../src/components/HistoryDrawer';
 import { TopFade } from '../../src/components/TopFade';
-import { Icon } from '../../src/components/Icon';
+import { EmptyChat } from '../../src/components/EmptyChat';
 import { useTheme } from '../../src/theme/ThemeProvider';
 import { useChatStore } from '../../src/store/ChatStore';
 import { layout } from '../../src/theme/tokens';
@@ -43,14 +42,27 @@ export default function ChatScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
-  const { active, model, setModel, sendMessage, stopStreaming, isStreaming } = useChatStore();
+  const {
+    messages,
+    model,
+    setModel,
+    sendMessage,
+    stopStreaming,
+    isStreaming,
+    temporary,
+    setTemporary,
+  } = useChatStore();
 
   const [draft, setDraft] = useState('');
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
 
-  const messages = active?.messages ?? [];
+  /*
+   * `messages` comes from the store rather than from `active`: in temporary mode the
+   * turns live outside the persisted state entirely, and the store is what knows
+   * which list is the one on screen.
+   */
   const isEmpty = messages.length === 0;
 
   /** False once the user scrolls up to read back; true again when they return. */
@@ -102,10 +114,6 @@ export default function ChatScreen() {
     if (dragging.current) measure(event);
   };
 
-  const onSelectPrompt = (prompt: PromptExample) => {
-    setDraft(`${prompt.title} ${prompt.subtitle}`);
-  };
-
   /*
    * Sending always returns to the tail, whatever the user was reading: their own
    * turn appearing somewhere off-screen is the one case where following is not a
@@ -127,8 +135,7 @@ export default function ChatScreen() {
       >
         {isEmpty ? (
           <View style={[styles.emptyBody, { paddingTop: insets.top + layout.chatNavBarHeight }]}>
-            {/* The template's own empty state: the OpenAI mark centered in the frame. */}
-            <Icon name="openai-mark" size={46} />
+            <EmptyChat temporary={temporary} />
           </View>
         ) : (
           <ScrollView
@@ -160,23 +167,29 @@ export default function ChatScreen() {
         )}
 
         <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 8) }]}>
-          {isEmpty ? <PromptExamples onSelect={onSelectPrompt} /> : null}
+          {/*
+           * No starter chips above the type box. They filled the draft with a canned
+           * sentence, which is a different thing from asking your own question, and on
+           * an empty screen they were the loudest element on it -- so the composer had
+           * to compete with two cards for the attention of someone about to type.
+           */}
           <Composer
             value={draft}
             onChangeText={setDraft}
             onSubmit={onSubmit}
             onStop={stopStreaming}
             isStreaming={isStreaming}
+            placeholder={temporary ? 'Temporary chat' : 'Ask anything'}
             onOpenVoice={() => router.push('/voice')}
           />
         </View>
       </KeyboardAvoidingView>
 
       {/*
-        * The bar has no fill of its own: the transcript runs the full height of the
-        * screen and dissolves into this gradient on its way up, which is what puts
-        * the chat under the bar instead of stopping below it.
-        */}
+       * The bar has no fill of its own: the transcript runs the full height of the
+       * screen and dissolves into this gradient on its way up, which is what puts
+       * the chat under the bar instead of stopping below it.
+       */}
       <TopFade />
       <View style={styles.navBarLayer} pointerEvents="box-none">
         <NavBar
@@ -185,6 +198,21 @@ export default function ChatScreen() {
           onPressEdit={() => router.push('/new')}
           onPressTitle={() => setModelPickerOpen(true)}
           onPressMore={() => router.push('/settings')}
+          /*
+           * The right slot holds the temporary toggle while the chat is empty --
+           * compose has nothing to start away from and the overflow menu nothing to
+           * act on -- and hands back to that pair once turns exist. The `|| temporary`
+           * is what keeps a temporary chat legible after its first reply: the toggle
+           * is the only thing on screen saying this conversation is not being kept,
+           * and the only way back out of it.
+           *
+           * So the offer to *enter* the mode is confined to an empty chat, which is
+           * the only place it means anything: a chat that has already sent a turn
+           * cannot retroactively not have stored it.
+           */
+          showTemporary={isEmpty || temporary}
+          temporary={temporary}
+          onToggleTemporary={() => setTemporary(!temporary)}
         />
       </View>
 

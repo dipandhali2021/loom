@@ -8,6 +8,7 @@ import { toMessageDTO } from '../dto.ts';
 import { aiModels, appModelIds } from '../env.ts';
 import { HttpError, notFound, parseBody } from '../http.ts';
 import { HISTORY_LIMIT, systemPrompt, toChatMessages } from '../prompt.ts';
+import { openStream, send } from '../sse.ts';
 
 /**
  * POST /api/v1/conversations/:conversationId/completions
@@ -32,14 +33,13 @@ const CompletionBody = z.object({
 
 /** First line of the opening message, trimmed to something that fits a list row. */
 function deriveTitle(text: string): string {
-  const line = text.split('\n').find((part) => part.trim().length > 0)?.trim() ?? '';
+  const line =
+    text
+      .split('\n')
+      .find((part) => part.trim().length > 0)
+      ?.trim() ?? '';
   const clipped = line.length > 60 ? `${line.slice(0, 57).trimEnd()}…` : line;
   return clipped || 'New chat';
-}
-
-/** SSE frame. Newlines inside the payload are safe: JSON escapes them. */
-function send(res: Response, event: Record<string, unknown>): void {
-  res.write(`data: ${JSON.stringify(event)}\n\n`);
 }
 
 export async function postCompletion(req: Request, res: Response): Promise<void> {
@@ -134,13 +134,7 @@ export async function postCompletion(req: Request, res: Response): Promise<void>
         return { userMessage: stored, assistantMessage: placeholder };
       });
 
-  res.status(200);
-  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
-  res.setHeader('Cache-Control', 'no-cache, no-transform');
-  res.setHeader('Connection', 'keep-alive');
-  // Tells nginx-style proxies not to buffer, which would defeat streaming entirely.
-  res.setHeader('X-Accel-Buffering', 'no');
-  res.flushHeaders();
+  openStream(res);
 
   // No 'user' frame when regenerating: the client already has that message.
   if (userMessage) send(res, { type: 'user', message: toMessageDTO(userMessage) });
@@ -198,7 +192,10 @@ export async function postCompletion(req: Request, res: Response): Promise<void>
         outputTokens: result.outputTokens,
       },
     });
-    await tx.conversation.update({ where: { id: conversationId }, data: { updatedAt: new Date() } });
+    await tx.conversation.update({
+      where: { id: conversationId },
+      data: { updatedAt: new Date() },
+    });
     return updated;
   });
 

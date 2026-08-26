@@ -226,6 +226,25 @@ export const type = {
   chatDiagram: { fontFamily: systemFont, fontSize: 12, lineHeight: 15, letterSpacing: -0.1, ...weight('510') },
   /** User bubble text — matches chatBody so both sides share a baseline rhythm. */
   chatBubble: { fontFamily: systemFont, fontSize: 18, lineHeight: 25, letterSpacing: -0.2, ...weight('400') },
+  /**
+   * The empty chat's own heading, and the paragraph under it.
+   *
+   * Their own pair rather than `title3Bold` / `footnote`: those are list-header and
+   * caption sizes, and this copy is the only thing on an otherwise blank screen --
+   * at caption size it read as a disclaimer someone had left behind rather than the
+   * screen's subject. The paragraph keeps 23pt of leading against its 16pt body,
+   * looser than `calloutRegular`, because it runs to three lines centred and tight
+   * leading is what makes that shape hard to read.
+   */
+  emptyTitle: { fontFamily: systemFont, fontSize: 28, lineHeight: 34, letterSpacing: -0.4, ...weight('700') },
+  emptyBody: { fontFamily: systemFont, fontSize: 16, lineHeight: 23, letterSpacing: -0.2, ...weight('400') },
+  /**
+   * The word shown while a reply is being waited for.
+   *
+   * A step down from `chatBody` and a shade heavier, so it reads as the app talking
+   * about the reply rather than as the first line of one.
+   */
+  thinking: { fontFamily: systemFont, fontSize: 16, lineHeight: 22, letterSpacing: -0.2, ...weight('510') },
   /** Nav bar title, "ChatGPT 5" — Semibold 22/27, two steps up from the kit's 18. */
   navTitle: { fontFamily: systemFont, fontSize: 22, lineHeight: 27, letterSpacing: -0.4, ...weight('590') },
   /** Composer field and its "Ask anything" placeholder. */

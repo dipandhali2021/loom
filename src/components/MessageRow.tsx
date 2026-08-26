@@ -1,69 +1,12 @@
 import React, { useEffect, useRef } from 'react';
 import { Animated, Easing, StyleSheet, View } from 'react-native';
 import { AppText } from './AppText';
-import { Icon } from './Icon';
+import { ThinkingIndicator } from './ThinkingIndicator';
 import { MessageActions } from './MessageActions';
 import { Markdown } from './Markdown';
 import { useTheme } from '../theme/ThemeProvider';
 import { Message } from '../store/types';
 import { layout, palette, type } from '../theme/tokens';
-
-/** One beat of the thinking indicator's cycle, per dot. */
-const DOT_DURATION = 420;
-const DOT_STAGGER = 140;
-
-/**
- * Shown from the moment a turn is sent until the first token lands, so the wait
- * for the model to start is never a blank row. The kit draws a single dot; three
- * staggered ones read as "working" rather than "finished with nothing to say",
- * which is what a lone static dot looks like on a slow first token.
- */
-function ThinkingDots() {
-  const dots = useRef([0, 1, 2].map(() => new Animated.Value(0))).current;
-
-  useEffect(() => {
-    const animations = dots.map((dot, index) =>
-      Animated.loop(
-        Animated.sequence([
-          // The offset is what staggers the three; without it they pulse in unison.
-          Animated.delay(index * DOT_STAGGER),
-          Animated.timing(dot, {
-            toValue: 1,
-            duration: DOT_DURATION,
-            easing: Easing.inOut(Easing.quad),
-            useNativeDriver: true,
-          }),
-          Animated.timing(dot, {
-            toValue: 0,
-            duration: DOT_DURATION,
-            easing: Easing.inOut(Easing.quad),
-            useNativeDriver: true,
-          }),
-          // Pads the cycle so the stagger does not collapse on the next pass.
-          Animated.delay((dots.length - 1 - index) * DOT_STAGGER),
-        ])
-      )
-    );
-    animations.forEach((animation) => animation.start());
-    return () => animations.forEach((animation) => animation.stop());
-  }, [dots]);
-
-  return (
-    <View style={styles.dots} accessibilityRole="progressbar" accessibilityLabel="Generating a reply">
-      {dots.map((dot, index) => (
-        <Animated.View
-          key={index}
-          style={{
-            opacity: dot.interpolate({ inputRange: [0, 1], outputRange: [0.28, 1] }),
-            transform: [{ scale: dot.interpolate({ inputRange: [0, 1], outputRange: [0.72, 1] }) }],
-          }}
-        >
-          <Icon name="loading-dot" size={7} />
-        </Animated.View>
-      ))}
-    </View>
-  );
-}
 
 /** Fades its children in once, so a turn arrives rather than snapping in. */
 function FadeIn({ children, style }: { children: React.ReactNode; style?: object }) {
@@ -129,8 +72,8 @@ function MessageRowBase({ message }: { message: Message }) {
   return (
     <View style={styles.assistantRow}>
       {waiting ? (
-        <View style={styles.dotWrap}>
-          <ThinkingDots />
+        <View style={styles.waitWrap}>
+          <ThinkingIndicator />
         </View>
       ) : message.text.length > 0 ? (
         /* Markdown rather than raw text: a reply is full of `##` and `**`, and
@@ -184,7 +127,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: layout.chatPadding,
     paddingTop: layout.turnGap,
   },
-  dotWrap: { height: 25, justifyContent: 'center' },
-  dots: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  // One line of chat body, so the indicator occupies exactly the room the first
+  // line of the reply will, and nothing shifts when it is replaced by text.
+  waitWrap: { minHeight: 25, justifyContent: 'center' },
   error: { marginTop: 4 },
 });
