@@ -1,13 +1,21 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  Keyboard,
   KeyboardAvoidingView,
   NativeScrollEvent,
   NativeSyntheticEvent,
   Platform,
   ScrollView,
   StyleSheet,
+  TextInput,
   View,
 } from 'react-native';
+import Animated, {
+  Easing,
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+} from 'react-native-reanimated';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NavBar } from '../../src/components/NavBar';
@@ -17,6 +25,7 @@ import { ModelPicker } from '../../src/components/ModelPicker';
 import { HistoryDrawer } from '../../src/components/HistoryDrawer';
 import { TopFade } from '../../src/components/TopFade';
 import { EmptyChat } from '../../src/components/EmptyChat';
+import { AttachmentSheet } from '../../src/components/AttachmentSheet';
 import { useTheme } from '../../src/theme/ThemeProvider';
 import { useChatStore } from '../../src/store/ChatStore';
 import { layout } from '../../src/theme/tokens';
@@ -31,6 +40,40 @@ const MODEL_LABEL = { 'gpt-3.5': '3.5', 'gpt-4': '4', 'gpt-5': '5' } as const;
  * text, so a stray flick does not strand them mid-reply.
  */
 const STICK_SLOP = 28;
+
+/**
+ * Stand-in height for the attachment panel until a keyboard has been measured.
+ *
+ * Only ever used on the very first open of a fresh launch where the field was
+ * never focused -- reachable, since the "+" does not need the keyboard first. Gboard
+ * and the iOS keyboard both land near this on a phone, so the panel is the right
+ * size rather than the wrong size, and every subsequent open uses the real number.
+ */
+const FALLBACK_KEYBOARD_HEIGHT = 290;
+
+/**
+ * How long to wait for the keyboard after asking for it, before giving up and
+ * closing the panel on its own animation.
+ *
+ * Only reached when `keyboardDidShow` never arrives: a hardware keyboard is
+ * attached, or the field refused focus. Long enough to cover a slow keyboard app
+ * cold-starting, short enough that the panel does not look stuck if it never comes.
+ */
+const KEYBOARD_WAIT_MS = 550;
+
+/** The panel's own timings, mirrored from AttachmentSheet so the footer can match. */
+const PANEL_OPEN_MS = 260;
+const PANEL_CLOSE_MS = 200;
+
+/**
+ * Air under the composer while something is covering the bottom of the screen.
+ *
+ * The safe-area inset is there to clear a home indicator or a gesture bar, and a
+ * keyboard or the attachment panel is already over that region -- so applying the
+ * full inset on top is 20-34pt of daylight between the type box and the keys. 4pt
+ * is enough that the pill does not touch them.
+ */
+const COVERED_GAP = 4;
 
 /**
  * The chat screen, following the ChatGPT Apps UI Kit (rR8Yz5BLDtLM1EKCPalwY3,
@@ -51,12 +94,214 @@ export default function ChatScreen() {
     isStreaming,
     temporary,
     setTemporary,
+    webSearch,
+    setWebSearch,
   } = useChatStore();
 
   const [draft, setDraft] = useState('');
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [sheetOpen, setSheetOpen] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
+  const inputRef = useRef<TextInput | null>(null);
+
+  /*
+   * The keyboard's own height, so the attachment panel is exactly as tall as the
+   * thing it replaces. Measured rather than assumed: it varies by keyboard app, by
+   * language, and by whether a suggestion strip is showing, and being 20pt out is
+   * visible as the composer jumping when the two trade places.
+   *
+   * Recorded from whichever show event the platform has (below) and remembered after
+   * the keyboard goes, since the panel is opened when there is nothing to measure.
+   */
+  const [keyboardHeight, setKeyboardHeight] = useState(FALLBACK_KEYBOARD_HEIGHT);
+
+  /*
+   * The composer's own bottom padding, animated rather than switched.
+   *
+   * It has to change -- the safe-area inset is wasted space once a keyboard is over
+   * it -- but changing it in one commit is a second source of exactly the jitter
+   * being fixed: the composer would drop 30pt the instant focus landed and then be
+   * pushed back up as the inset grew. Driven off a shared value, it can be given
+   * the keyboard's own duration and travel with it.
+   */
+  const restGap = Math.max(insets.bottom, 8);
+  /*
+   * 0 = the screen's own bottom edge is under the composer, 1 = something else is.
+   * A ratio rather than the padding itself, so a rotation changing `restGap` is
+   * picked up by the next frame without an effect having to chase it.
+   */
+  const covered = useSharedValue(0);
+  const footerStyle = useAnimatedStyle(() => ({
+    paddingBottom: restGap + covered.value * (COVERED_GAP - restGap),
+  }));
+
+  const setGap = useCallback(
+    (next: boolean, ms: number) => {
+      const target = next ? 1 : 0;
+      // Linear for the same reason the panel's collapse is: the keyboard's inset
+      // carries the easing, and a second curve on top of it bends the sum.
+      covered.value = ms > 0 ? withTiming(target, { duration: ms, easing: Easing.linear }) : target;
+    },
+    [covered],
+  );
+
+  /*
+   * The panel-to-keyboard handover.
+   *
+   * The composer sits above `panelHeight + keyboardInset`, so it only holds still
+   * if those two always sum to the same number. That is the whole problem: the
+   * panel's collapse and the keyboard's rise are separately timed animations over
+   * the same run of pixels, and the difference between them was the composer
+   * lifting and settling for about a second.
+   *
+   * So the panel is not collapsed when focus is requested. It is left standing --
+   * it *is* the keyboard's height, which is why it was measured -- until the
+   * keyboard's frame change is announced, and then it gives up exactly the duration
+   * the keyboard reports for exactly the points the inset is taking.
+   *
+   * `handoff` is what is being waited for; `collapseMs`, once set, is how the panel
+   * should leave, and setting it is also what closes the panel.
+   */
+  const [handoff, setHandoff] = useState(false);
+  /*
+   * Whether the panel is up, for the keyboard listeners. They are registered once,
+   * so they cannot read `sheetOpen` -- and they need it *before* the render that
+   * sets it, since `openSheet` dismisses the keyboard in the same tick it opens the
+   * panel and the hide event has to already know the panel is coming.
+   */
+  const sheetOpenRef = useRef(false);
+  // Mirrored for the listener, which is registered once and must not close over a
+  // stale value.
+  const handoffRef = useRef(false);
+  const handoffTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [collapseMs, setCollapseMs] = useState<number | undefined>(undefined);
+
+  /** Ends the handover, collapsing the panel over `ms` (0 = within one frame). */
+  const finishHandoff = useCallback((ms: number | undefined) => {
+    if (!handoffRef.current) return;
+    handoffRef.current = false;
+    if (handoffTimer.current) {
+      clearTimeout(handoffTimer.current);
+      handoffTimer.current = null;
+    }
+    sheetOpenRef.current = false;
+    setCollapseMs(ms);
+    setHandoff(false);
+    setSheetOpen(false);
+  }, []);
+
+  useEffect(() => {
+    /*
+     * `keyboardWillShow` on iOS, `keyboardDidShow` on Android -- and the difference
+     * is the point, not a portability workaround. iOS announces the frame change
+     * before it animates and reports its duration, so the panel can be given the
+     * same duration and shrink alongside it. Android has no `Will` event and does
+     * not animate the resize at all: by the time `Did` arrives the window is already
+     * short, so the panel has to vanish in that same commit (`0`) rather than
+     * animate out of a space that no longer exists.
+     */
+    const rising = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+
+    const shown = Keyboard.addListener(rising, (event) => {
+      const height = event.endCoordinates?.height ?? 0;
+      // A hardware keyboard reports a near-zero frame; that is not a panel height.
+      if (height > 120) setKeyboardHeight(height);
+
+      const duration = Platform.OS === 'ios' ? (event.duration ?? 0) : 0;
+      if (height > 120) setGap(true, duration);
+
+      /*
+       * A keyboard that reports no height is not replacing the panel, so the panel
+       * leaves on its own curve rather than being cut to make room for nothing.
+       */
+      if (height <= 120) {
+        finishHandoff(undefined);
+        return;
+      }
+      finishHandoff(duration);
+    });
+
+    /*
+     * The panel taking the keyboard's place is also a keyboard hiding, and there the
+     * inset must stay small -- the panel is over the same region. `sheetOpenRef` is
+     * what tells the two cases apart.
+     */
+    const falling = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const hidden = Keyboard.addListener(falling, (event) => {
+      if (sheetOpenRef.current) return;
+      setGap(false, Platform.OS === 'ios' ? (event.duration ?? 0) : 0);
+    });
+
+    return () => {
+      shown.remove();
+      hidden.remove();
+      if (handoffTimer.current) clearTimeout(handoffTimer.current);
+    };
+  }, [finishHandoff, setGap]);
+
+  /*
+   * The keyboard and the panel are alternatives, never both. Opening the panel
+   * lowers the keyboard, and closing it with the "x" or a downward swipe raises it
+   * again -- the user was mid-message, and taking the panel away to leave a blank
+   * gap would be a third state neither of them asked for.
+   */
+  const openSheet = useCallback(() => {
+    // Measured before dismissing: `metrics()` is empty once it is down, and this is
+    // the path where a keyboard is actually up to measure.
+    const metrics = Keyboard.metrics();
+    if (metrics && metrics.height > 120) setKeyboardHeight(metrics.height);
+
+    /*
+     * Set before dismissing, so the hide listener firing in this same turn already
+     * knows the panel is taking the keyboard's place and leaves the inset alone.
+     */
+    const fromKeyboard = Keyboard.isVisible();
+    sheetOpenRef.current = true;
+    Keyboard.dismiss();
+    setCollapseMs(undefined);
+    setSheetOpen(true);
+    /*
+     * Only when the keyboard was down. Coming from a keyboard the gap is already
+     * closed, and re-animating it to where it is would be a visible nudge; coming
+     * from nothing, the composer has to give up the safe-area inset over exactly the
+     * span the panel takes to grow, or it drops 30pt a quarter-second early.
+     */
+    if (!fromKeyboard) setGap(true, PANEL_OPEN_MS);
+  }, [setGap]);
+
+  const closeSheet = useCallback(
+    (restoreKeyboard: boolean) => {
+      if (!restoreKeyboard) {
+        // Nothing is replacing the panel, so it animates out on its own curve, and
+        // the safe-area inset comes back over the same span.
+        sheetOpenRef.current = false;
+        setCollapseMs(undefined);
+        setSheetOpen(false);
+        setGap(false, PANEL_CLOSE_MS);
+        return;
+      }
+
+      /*
+       * The panel stays where it is; the keyboard's own frame event is what takes
+       * it away. The timer is the only fallback path -- reached when no keyboard
+       * ever arrives, because one is attached over USB or the field refused focus --
+       * and it lets the panel leave on its own curve, since in that case nothing is
+       * coming to fill the space.
+       */
+      handoffRef.current = true;
+      setHandoff(true);
+      inputRef.current?.focus();
+      if (handoffTimer.current) clearTimeout(handoffTimer.current);
+      handoffTimer.current = setTimeout(() => {
+        // No keyboard came, so nothing is going to cover the bottom edge.
+        sheetOpenRef.current = false;
+        setGap(false, PANEL_CLOSE_MS);
+        finishHandoff(undefined);
+      }, KEYBOARD_WAIT_MS);
+    },
+    [finishHandoff, setGap],
+  );
 
   /*
    * `messages` comes from the store rather than from `active`: in temporary mode the
@@ -122,6 +367,15 @@ export default function ChatScreen() {
    */
   const onSubmit = (text: string) => {
     setDraft('');
+    /*
+     * Sending is done with the panel: it is a pre-send control, and leaving it open
+     * over the reply it configured would cover the transcript it belongs to. The
+     * keyboard is not restored either, so the inset comes back with it.
+     */
+    sheetOpenRef.current = false;
+    setCollapseMs(undefined);
+    setSheetOpen(false);
+    if (!Keyboard.isVisible()) setGap(false, PANEL_CLOSE_MS);
     sendMessage(text);
     stick.current = true;
     requestAnimationFrame(() => requestAnimationFrame(follow));
@@ -166,7 +420,7 @@ export default function ChatScreen() {
           </ScrollView>
         )}
 
-        <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 8) }]}>
+        <Animated.View style={[styles.footer, footerStyle]}>
           {/*
            * No starter chips above the type box. They filled the draft with a canned
            * sentence, which is a different thing from asking your own question, and on
@@ -181,8 +435,44 @@ export default function ChatScreen() {
             isStreaming={isStreaming}
             placeholder={temporary ? 'Temporary chat' : 'Ask anything'}
             onOpenVoice={() => router.push('/voice')}
+            /*
+             * False the moment the "x" is tapped, even though the panel itself is
+             * still standing until the keyboard is under it: the glyph is the
+             * acknowledgement of the tap, and holding the cross for another 250ms
+             * reads as the tap not having registered.
+             */
+            sheetOpen={sheetOpen && !handoff}
+            onToggleSheet={() => (sheetOpen ? closeSheet(true) : openSheet())}
+            inputRef={inputRef}
+            /*
+             * Tapping into the field closes the panel without asking for the
+             * keyboard back -- the tap is already raising it, and a `focus()` on top
+             * of that is what made it flicker.
+             */
+            onFocusField={() => {
+              // The tap is already raising the keyboard, so the inset stays small
+              // and the panel collapses over the rise the field just asked for.
+              setCollapseMs(undefined);
+              setSheetOpen(false);
+            }}
+            webSearch={webSearch}
+            onDisableWebSearch={() => setWebSearch(false)}
           />
-        </View>
+        </Animated.View>
+
+        {/*
+         * Below the composer, inside the KeyboardAvoidingView: the panel occupies
+         * the same layout slot the keyboard's inset does, so the type box does not
+         * move as one gives way to the other.
+         */}
+        <AttachmentSheet
+          open={sheetOpen}
+          height={keyboardHeight}
+          onClose={closeSheet}
+          collapseMs={collapseMs}
+          webSearch={webSearch}
+          onToggleWebSearch={setWebSearch}
+        />
       </KeyboardAvoidingView>
 
       {/*
@@ -245,5 +535,7 @@ const styles = StyleSheet.create({
   transcript: { paddingBottom: 12 },
   // Sits above the fade, so the icons stay at full strength.
   navBarLayer: { position: 'absolute', top: 0, left: 0, right: 0 },
-  footer: { gap: 10, paddingTop: 6 },
+  // The gap under it is animated (`footerStyle`); this is only the air above, which
+  // separates the type box from the last turn's action row.
+  footer: { paddingTop: 4 },
 });
