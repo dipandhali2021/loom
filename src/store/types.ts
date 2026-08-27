@@ -1,4 +1,4 @@
-import type { ApiSource } from '../lib/api';
+import type { ApiAttachment, ApiSource } from '../lib/api';
 
 export type Role = 'user' | 'assistant';
 
@@ -45,7 +45,35 @@ export type Message = {
    * is not the same as an empty array: `[]` would mean a search that found nothing.
    */
   sources?: ApiSource[];
+  /**
+   * Photos and files this question carried, as the upload pipeline returned them.
+   * Absent on a plain turn and on every reply -- only a question can attach.
+   */
+  attachments?: ApiAttachment[];
   createdAt: number;
+};
+
+/**
+ * A file the composer is holding, before or after it reaches the pipeline.
+ *
+ * The local `uri` is kept alongside the uploaded result so a chip can show the photo
+ * immediately, while it is still going up -- and so a failed upload has something to
+ * retry from. Only `remote` is ever sent with a turn.
+ */
+export type PendingAttachment = {
+  /** Local id; the server's own id lives on `remote`. */
+  id: string;
+  kind: 'image' | 'document';
+  name: string;
+  mimeType: string;
+  size: number;
+  /** Where the picker left it on this device. */
+  uri: string;
+  status: 'uploading' | 'ready' | 'failed';
+  /** Why it failed, ready to show under the chip. */
+  error?: string;
+  /** Set once the pipeline has processed it. */
+  remote?: ApiAttachment;
 };
 
 export type Conversation = {

@@ -27,7 +27,20 @@
       "expo-router",
       "expo-font",
       "@clerk/expo",
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Allow ChatGPT to use the microphone so you can dictate a message and talk in voice mode."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow ChatGPT to access your photos so you can attach one to a message.",
+          "cameraPermission": "Allow ChatGPT to use the camera so you can attach a photo you take."
+        }
+      ]
     ],
     "scheme": "chatgptclone",
     "experiments": {

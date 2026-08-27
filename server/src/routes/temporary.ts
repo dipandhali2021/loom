@@ -3,6 +3,7 @@ import type { Request, Response } from 'express';
 import { z } from 'zod';
 
 import { runTurn } from '../agent.ts';
+import { AttachmentsSchema, toContentParts } from '../attachments.ts';
 import { currentUser } from '../auth.ts';
 import { prisma } from '../db.ts';
 import { aiModels, appModelIds, webSearchEnabled } from '../env.ts';
@@ -56,12 +57,20 @@ const TemporaryBody = z.object({
       z.object({
         role: z.enum(['user', 'assistant']),
         text: z.string().max(32_000),
+        /**
+         * What that turn had attached, replayed from the client's own copy for the
+         * same reason its text is. Validated exactly as the stored route validates
+         * them -- a temporary chat is not a looser one.
+         */
+        attachments: AttachmentsSchema.default([]),
       }),
     )
     .max(MAX_HISTORY)
     .default([]),
   /** The composer's web-search switch, same as the stored route. */
   search: z.boolean().default(false),
+  /** This turn's attachments, as /uploads returned them. Nothing is stored either way. */
+  attachments: AttachmentsSchema.default([]),
 });
 
 export async function postTemporaryCompletion(req: Request, res: Response): Promise<void> {
@@ -104,8 +113,14 @@ export async function postTemporaryCompletion(req: Request, res: Response): Prom
       model,
       messages: [
         { role: 'system', content: systemPrompt(profile, searchAllowed) },
-        ...toChatMessages(body.history.map((turn) => ({ role: turn.role, content: turn.text }))),
-        { role: 'user', content: body.text },
+        ...toChatMessages(
+          body.history.map((turn) => ({
+            role: turn.role,
+            content: turn.text,
+            attachments: turn.attachments,
+          })),
+        ),
+        { role: 'user', content: toContentParts(body.text, body.attachments) },
       ],
       searchAllowed,
       onDelta: (delta) => send(res, { type: 'delta', text: delta }),

@@ -53,6 +53,14 @@ type Props = {
   collapseMs?: number;
   webSearch: boolean;
   onToggleWebSearch: (on: boolean) => void;
+  /**
+   * Opens the system photo picker. Resolves with a note to show under the row when
+   * the pick could not happen -- the per-message cap, most often -- and `null` when
+   * it did, including when the user simply backed out of it.
+   */
+  onPickPhotos: () => Promise<string | null>;
+  /** The same, for the document picker. */
+  onPickFiles: () => Promise<string | null>;
 };
 
 const OPEN_DURATION = 260;
@@ -71,6 +79,8 @@ export function AttachmentSheet({
   collapseMs,
   webSearch,
   onToggleWebSearch,
+  onPickPhotos,
+  onPickFiles,
 }: Props) {
   const { colors } = useTheme();
 
@@ -123,6 +133,22 @@ export function AttachmentSheet({
   }, [collapseMs, open, progress]);
 
   const requestClose = useCallback(() => onClose(true), [onClose]);
+
+  /**
+   * Runs one picker and closes the panel unless it had something to say.
+   *
+   * `false` for the keyboard: what replaced the panel was the system picker, and
+   * raising a keyboard behind it would put the composer back over the transcript for
+   * no one to type into.
+   */
+  const pick = useCallback(
+    async (open: () => Promise<string | null>) => {
+      const note = await open();
+      if (!note) onClose(false);
+      return note;
+    },
+    [onClose],
+  );
 
   /*
    * Swipe down to dismiss. Only downward travel counts -- the panel is already at
@@ -181,8 +207,15 @@ export function AttachmentSheet({
               affordance a swipe-to-dismiss surface cannot state in words. */}
           <View style={[styles.grabber, { backgroundColor: colors.separatorOpaque }]} />
 
-          <Row icon="image" label="Photos" onPress={() => {}} disabledNote="Not wired up yet" />
-          <Row icon="file-02" label="Files" onPress={() => {}} disabledNote="Not wired up yet" />
+          {/*
+           * The panel closes once the pick has happened, not before: a refusal (the
+           * per-message cap) is reported as this row's own note, and closing first
+           * would take the row away with the explanation on it. A pick that went
+           * ahead does close it -- the chips it produced sit above the composer, and
+           * a panel still standing over them hides what was just attached.
+           */}
+          <Row icon="image" label="Photos" onPress={() => pick(onPickPhotos)} />
+          <Row icon="file-02" label="Files" onPress={() => pick(onPickFiles)} />
 
           <View style={[styles.divider, { backgroundColor: colors.separatorNonOpaque }]} />
 
@@ -221,7 +254,12 @@ function Row({
 }: {
   icon: 'image' | 'file-02' | 'globe-01';
   label: string;
-  onPress: () => void;
+  /**
+   * The row's action. Resolving with a string shows it as the row's note, which is
+   * how a refusal is reported: the app has no alert or toast pattern, and the row
+   * the user just pressed is where they are already looking.
+   */
+  onPress: () => void | Promise<string | null>;
   /**
    * Given only for a row that is a setting rather than an action. `undefined`
    * leaves the row stateless, which is what Photos and Files are -- they open
@@ -234,15 +272,19 @@ function Row({
 }) {
   const { colors } = useTheme();
   const [pressedUnavailable, setPressedUnavailable] = useState(false);
+  // What the action itself reported, which outranks both of the static notes.
+  const [failure, setFailure] = useState<string | null>(null);
 
-  const subtitle = pressedUnavailable ? disabledNote : note;
+  const subtitle = failure ?? (pressedUnavailable ? disabledNote : note);
   const toggles = on !== undefined;
 
   return (
     <Pressable
       onPress={() => {
         if (disabledNote) setPressedUnavailable(true);
-        onPress();
+        setFailure(null);
+        const result = onPress();
+        if (result) void result.then(setFailure).catch(() => setFailure('That did not work.'));
       }}
       style={({ pressed }) => [
         styles.row,

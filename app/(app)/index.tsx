@@ -28,6 +28,8 @@ import { EmptyChat } from '../../src/components/EmptyChat';
 import { AttachmentSheet } from '../../src/components/AttachmentSheet';
 import { useTheme } from '../../src/theme/ThemeProvider';
 import { useChatStore } from '../../src/store/ChatStore';
+import { useAttachments } from '../../src/lib/useAttachments';
+import { useDictation } from '../../src/lib/useDictation';
 import { layout } from '../../src/theme/tokens';
 
 const MODEL_LABEL = { 'gpt-3.5': '3.5', 'gpt-4': '4', 'gpt-5': '5' } as const;
@@ -96,9 +98,30 @@ export default function ChatScreen() {
     setTemporary,
     webSearch,
     setWebSearch,
+    authToken,
   } = useChatStore();
 
   const [draft, setDraft] = useState('');
+
+  /*
+   * Files picked for the turn being typed, uploading in the background while it is
+   * written. Owned here rather than in the composer because both the "+" panel (which
+   * picks them) and the composer (which shows and sends them) need the same list, and
+   * they are siblings.
+   */
+  const attachments = useAttachments(authToken);
+
+  /*
+   * Dictation appends rather than replaces: a transcript arriving over half a typed
+   * sentence would delete it, and the mic is as often used to finish a thought as to
+   * start one. `setDraft` with a function so two quick clips cannot race.
+   */
+  const dictation = useDictation(
+    authToken,
+    useCallback((text: string) => {
+      setDraft((prev) => (prev.trim().length > 0 ? `${prev.replace(/\s+$/, '')} ${text}` : text));
+    }, []),
+  );
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -366,7 +389,11 @@ export default function ChatScreen() {
    * an end to scroll to.
    */
   const onSubmit = (text: string) => {
+    // Read before clearing, and only the ones the pipeline finished with: a tile
+    // still uploading is not part of this turn.
+    const ready = attachments.ready;
     setDraft('');
+    attachments.clear();
     /*
      * Sending is done with the panel: it is a pre-send control, and leaving it open
      * over the reply it configured would cover the transcript it belongs to. The
@@ -376,7 +403,7 @@ export default function ChatScreen() {
     setCollapseMs(undefined);
     setSheetOpen(false);
     if (!Keyboard.isVisible()) setGap(false, PANEL_CLOSE_MS);
-    sendMessage(text);
+    sendMessage(text, ready);
     stick.current = true;
     requestAnimationFrame(() => requestAnimationFrame(follow));
   };
@@ -457,6 +484,9 @@ export default function ChatScreen() {
             }}
             webSearch={webSearch}
             onDisableWebSearch={() => setWebSearch(false)}
+            attachments={attachments.attachments}
+            onRemoveAttachment={attachments.remove}
+            dictation={dictation}
           />
         </Animated.View>
 
@@ -472,6 +502,8 @@ export default function ChatScreen() {
           collapseMs={collapseMs}
           webSearch={webSearch}
           onToggleWebSearch={setWebSearch}
+          onPickPhotos={attachments.pickPhotos}
+          onPickFiles={attachments.pickFiles}
         />
       </KeyboardAvoidingView>
 

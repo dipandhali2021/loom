@@ -6,6 +6,7 @@ import type {
   Message,
   MessageRole,
 } from './generated/prisma/client.ts';
+import { AttachmentsSchema, type Attachment } from './attachments.ts';
 
 /**
  * The database and the app speak slightly different dialects. Translation happens
@@ -46,6 +47,8 @@ export type MessageDTO = {
   pending?: boolean;
   /** Present only on a reply that actually searched. */
   sources?: SourceDTO[];
+  /** Present only on a turn the user attached something to. */
+  attachments?: Attachment[];
   createdAt: number;
 };
 
@@ -111,8 +114,24 @@ function toSourceDTOs(value: unknown): SourceDTO[] | null {
   return sources.length > 0 ? sources : null;
 }
 
+/**
+ * Reads the `attachments` column back into the DTO shape.
+ *
+ * Parsed with the same schema the upload route returns and the completions route
+ * accepts, rather than cast: the column is `jsonb`, so a row written by an older build
+ * -- or by hand -- would otherwise reach the app as an attachment with an undefined url
+ * and render as a broken chip. A row that fails is dropped rather than repaired.
+ */
+function toAttachmentDTOs(value: unknown): Attachment[] | null {
+  if (!Array.isArray(value)) return null;
+  const parsed = AttachmentsSchema.safeParse(value);
+  if (!parsed.success || parsed.data.length === 0) return null;
+  return parsed.data;
+}
+
 export function toMessageDTO(message: Message): MessageDTO {
   const sources = toSourceDTOs(message.sources);
+  const attachments = toAttachmentDTOs(message.attachments);
   return {
     id: message.id,
     role: message.role === 'assistant' ? 'assistant' : 'user',
@@ -120,6 +139,7 @@ export function toMessageDTO(message: Message): MessageDTO {
     // Only send the flag when it is true; the app treats it as optional.
     ...(message.status === 'complete' ? {} : { pending: true }),
     ...(sources ? { sources } : {}),
+    ...(attachments ? { attachments } : {}),
     createdAt: message.createdAt.getTime(),
   };
 }

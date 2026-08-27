@@ -19,16 +19,31 @@ export type ToolCall = {
 };
 
 /**
+ * One piece of a multi-part user turn.
+ *
+ * The array form of `content` exists for attachments: an image reaches the model as a
+ * URL it fetches, not as text, so a turn carrying one cannot be a plain string. Only
+ * the two shapes this server actually sends are modelled -- the endpoint accepts more,
+ * and a wider union here would be types for a request nothing makes.
+ */
+export type ContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } };
+
+/**
  * A turn in the conversation sent upstream.
  *
  * `content` is nullable because an assistant turn that only asked for a tool has no
- * text, and the endpoint expects the field present and null rather than absent.
+ * text, and the endpoint expects the field present and null rather than absent. It is
+ * also allowed to be an array of parts, which is how a turn with an attachment is
+ * expressed; every turn without one stays a plain string, so stored history and the
+ * tool loop are untouched by this.
  * `tool_calls` and `tool_call_id` are snake_case because these objects are serialised
  * straight into the request body -- renaming them here would mean mapping them back.
  */
 export type ChatMessage = {
   role: ChatRole;
-  content: string | null;
+  content: string | ContentPart[] | null;
   tool_calls?: ToolCall[];
   tool_call_id?: string;
 };

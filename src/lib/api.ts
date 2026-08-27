@@ -112,6 +112,25 @@ export type ApiSource = {
   fetched: boolean;
 };
 
+/**
+ * One photo or file a turn carried. Mirrors `Attachment` in server/src/attachments.ts.
+ *
+ * URLs and extracted text, never bytes: the file went straight to the upload
+ * pipeline, and this is only what came back out of it. Small enough that a turn
+ * still fits the server's 1MB JSON limit.
+ */
+export type ApiAttachment = {
+  id: string;
+  kind: 'image' | 'document';
+  name: string;
+  mimeType: string;
+  size: number;
+  /** Pipeline URLs the model is shown -- the photo itself, or a page render. */
+  images: string[];
+  /** Text pulled out of a document, when the pipeline could extract any. */
+  text?: string;
+};
+
 export type ApiMessage = {
   id: string;
   role: 'user' | 'assistant';
@@ -119,6 +138,8 @@ export type ApiMessage = {
   pending?: boolean;
   /** Present only on a reply that searched the web. */
   sources?: ApiSource[];
+  /** Present only on a question that carried photos or files. */
+  attachments?: ApiAttachment[];
   createdAt: number;
 };
 
@@ -228,7 +249,12 @@ export type TemporaryEvent =
   | { type: 'error'; message: string };
 
 /** One prior turn of a temporary chat, replayed from the client's own copy. */
-export type TemporaryTurn = { role: 'user' | 'assistant'; text: string };
+export type TemporaryTurn = {
+  role: 'user' | 'assistant';
+  text: string;
+  /** Replayed too, so a follow-up about a photo still has the photo. */
+  attachments?: ApiAttachment[];
+};
 
 /**
  * Yields each `data:` frame of an SSE body, parsed.
@@ -321,6 +347,7 @@ export async function* streamCompletion({
   conversationId,
   text,
   model,
+  attachments,
   search,
   regenerateMessageId,
   signal,
@@ -329,6 +356,8 @@ export async function* streamCompletion({
   conversationId: string;
   text: string;
   model: string;
+  /** Photos and files for this turn, as `uploadAttachment` returned them. */
+  attachments?: ApiAttachment[];
   /** Let the model search the web for this turn. The composer's switch. */
   search?: boolean;
   /** Rewrite this assistant message instead of appending a new turn. */
@@ -341,6 +370,7 @@ export async function* streamCompletion({
     body: {
       text,
       model,
+      ...(attachments && attachments.length > 0 ? { attachments } : {}),
       ...(search ? { search: true } : {}),
       ...(regenerateMessageId ? { regenerateMessageId } : {}),
     },
@@ -362,6 +392,7 @@ export async function* streamTemporaryCompletion({
   text,
   model,
   history,
+  attachments,
   search,
   signal,
 }: {
@@ -369,6 +400,8 @@ export async function* streamTemporaryCompletion({
   text: string;
   model: string;
   history: TemporaryTurn[];
+  /** Photos and files for this turn, as `uploadAttachment` returned them. */
+  attachments?: ApiAttachment[];
   /** Let the model search the web for this turn. The composer's switch. */
   search?: boolean;
   signal?: AbortSignal;
@@ -376,8 +409,184 @@ export async function* streamTemporaryCompletion({
   const body = await openEventStream({
     path: '/api/v1/temporary/completions',
     getToken,
-    body: { text, model, history, ...(search ? { search: true } : {}) },
+    body: {
+      text,
+      model,
+      history,
+      ...(attachments && attachments.length > 0 ? { attachments } : {}),
+      ...(search ? { search: true } : {}),
+    },
     signal,
   });
   yield* readEvents<TemporaryEvent>(body, signal);
 }
+
+// --- Attachments and dictation (multipart) ----------------------------------
+
+/**
+ * POSTs one local file to a route that expects `multipart/form-data`.
+ *
+ * The multipart body is built natively, by `expo-file-system`'s own upload task,
+ * rather than handed to `fetch` as a `FormData`. Both routes work in principle, but
+ * the `FormData` one loses the part's content type on exactly the files a picker
+ * produces: `expo/fetch` only writes a part `Content-Type` when `File.type` is a
+ * non-empty string, `File.type` is derived from the path extension and is empty
+ * whenever the platform cannot map it, and a part with no content type makes the
+ * server's parser fall back to its default of `text/plain`. A PDF then arrives
+ * announced as text. The native task takes the mime as an explicit option, so the
+ * type the picker reported is the type the server reads back.
+ *
+ * It also avoids reading the file through the permission-checked JS API. In Expo Go
+ * on Android the document picker copies into the base cache directory while the
+ * file-system module resolves permissions against the per-experience scoped ones, so
+ * a file that is present and readable can report as inaccessible. The native task
+ * streams it with the OS's own handle and never consults that check.
+ */
+async function postFile<T>(
+  path: string,
+  getToken: GetToken,
+  {
+    uri,
+    name,
+    mimeType,
+    signal,
+  }: { uri: string; name?: string; mimeType?: string; signal?: AbortSignal },
+): Promise<T> {
+  const { File, UploadType } = await import('expo-file-system');
+
+  let file: InstanceType<typeof File>;
+  try {
+    file = new File(uri);
+  } catch {
+    throw new ApiError(0, 'unreadable_file', 'That file could not be read.');
+  }
+
+  await describeUpload(path, file, { uri, name, mimeType });
+  const startedAt = Date.now();
+
+  /*
+   * The display name travels as a form field. The part's own `filename` is whatever
+   * the picker called its cache copy ("cropped1814158652.jpg"), and the label the
+   * user sees -- and the model is told -- should be the name they recognise.
+   */
+  const parameters: Record<string, string> = {};
+  if (name) parameters.name = name;
+  if (mimeType) parameters.mimeType = mimeType;
+
+  let result: { status: number; body: string };
+  try {
+    result = await file.upload(`${requireBaseUrl()}${path}`, {
+      httpMethod: 'POST',
+      uploadType: UploadType.MULTIPART,
+      fieldName: 'file',
+      ...(mimeType ? { mimeType } : {}),
+      parameters,
+      headers: { Accept: 'application/json', ...(await authorize(getToken)) },
+      ...(signal ? { signal } : {}),
+    });
+  } catch (error) {
+    if (signal?.aborted || (error instanceof Error && error.name === 'AbortError')) {
+      throw new AbortedError();
+    }
+    if (__DEV__) {
+      console.log(
+        `[upload] ${path} <- failed after ${Date.now() - startedAt}ms ::`,
+        error instanceof Error ? error.message : error,
+      );
+    }
+    throw new ApiError(0, 'unreadable_file', 'That file could not be read.');
+  }
+
+  if (result.status < 200 || result.status >= 300) {
+    const failure = await toApiError({ status: result.status, text: async () => result.body });
+    if (__DEV__) {
+      console.log(
+        `[upload] ${path} <- ${result.status} ${failure.code} after ${Date.now() - startedAt}ms :: ${failure.message}`,
+      );
+    }
+    throw failure;
+  }
+  if (__DEV__) console.log(`[upload] ${path} <- 200 after ${Date.now() - startedAt}ms`);
+
+  try {
+    return JSON.parse(result.body) as T;
+  } catch {
+    throw new ApiError(result.status, 'http_error', 'The server sent something unreadable.');
+  }
+}
+
+/**
+ * Logs what is actually about to be uploaded, in development only.
+ *
+ * Every field the server decides a type from originates here, and each of them can be
+ * empty or wrong without anything looking broken: a picker reports no `mimeType`, and
+ * the platform cannot always map a cache copy's extension, which leaves `File.type`
+ * empty. The first bytes are logged beside them because they are the one source that
+ * cannot lie -- a PDF starts `%PDF-`, and if that is missing the file itself is the
+ * problem, not the labelling.
+ *
+ * The labels are logged before the bytes are touched, and separately, because reading
+ * through this API is permission-checked and can fail on a file the upload itself
+ * will stream happily. When that happens the failure is the interesting part.
+ */
+async function describeUpload(
+  path: string,
+  file: { size: number | null; type: string | null; uri: string; bytes: () => Promise<Uint8Array> },
+  picked: { uri: string; name?: string; mimeType?: string },
+): Promise<void> {
+  if (!__DEV__) return;
+  console.log(
+    [
+      `[upload] ${path} ->`,
+      `name=${JSON.stringify(picked.name ?? '')}`,
+      `picked.mimeType=${JSON.stringify(picked.mimeType ?? '')}`,
+      `File.type=${JSON.stringify(file.type)}`,
+      `size=${file.size ?? '-'}`,
+      `uri=${picked.uri}`,
+    ].join(' '),
+  );
+  try {
+    const head = (await file.bytes()).slice(0, 8);
+    const hex = Array.from(head, (byte) => byte.toString(16).padStart(2, '0')).join(' ');
+    const ascii = Array.from(head, (byte) =>
+      byte >= 0x20 && byte < 0x7f ? String.fromCharCode(byte) : '.',
+    ).join('');
+    console.log(`[upload] ${path} -> head=[${hex}] "${ascii}"`);
+  } catch (error) {
+    console.log(
+      `[upload] ${path} -> could not read bytes in JS (the native upload may still work):`,
+      error instanceof Error ? error.message : error,
+    );
+  }
+}
+
+/**
+ * Sends one photo or file to the upload pipeline and resolves with what to attach.
+ *
+ * The bytes go to the pipeline, not into a chat message: what comes back is URLs and
+ * any text that could be extracted, which is small enough to ride along in the
+ * turn's JSON body. Throws `ApiError` on refusal (too large, wrong kind, pipeline
+ * unavailable) with a message meant to be shown.
+ */
+export const uploadAttachment = (
+  getToken: GetToken,
+  opts: { uri: string; name?: string; mimeType?: string; signal?: AbortSignal },
+) =>
+  postFile<{ attachment: ApiAttachment }>('/api/v1/uploads', getToken, opts).then(
+    (body) => body.attachment,
+  );
+
+/** Whether this server can take attachments at all, and how big. */
+export const uploadStatus = (getToken: GetToken) =>
+  request<{ available: boolean; maxBytes: number }>('/api/v1/uploads/status', getToken);
+
+/**
+ * Transcribes a recorded clip and resolves with its text.
+ *
+ * The result lands in the user's own draft, where they read it before sending -- it
+ * is never fed anywhere on its own.
+ */
+export const transcribe = (
+  getToken: GetToken,
+  opts: { uri: string; mimeType?: string; signal?: AbortSignal },
+) => postFile<{ text: string }>('/api/v1/transcribe', getToken, opts).then((body) => body.text);

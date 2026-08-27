@@ -2,6 +2,7 @@ import type { Request, Response } from 'express';
 import { z } from 'zod';
 
 import { runTurn } from '../agent.ts';
+import { AttachmentsSchema, toContentParts } from '../attachments.ts';
 import { currentUser } from '../auth.ts';
 import { prisma } from '../db.ts';
 import { toMessageDTO } from '../dto.ts';
@@ -39,6 +40,16 @@ const CompletionBody = z.object({
    * turn simply runs without the tool, the way it did before there was one.
    */
   search: z.boolean().default(false),
+  /**
+   * Photos and files the composer attached, as the /uploads route returned them.
+   *
+   * URLs and extracted text, not bytes: the file went to the upload pipeline
+   * directly, so what arrives here is small enough to sit inside the 1MB JSON limit
+   * app.ts sets. Every field is re-validated (attachments.ts) rather than trusted --
+   * the client could post any URL it liked, and only the pipeline's own hosts are
+   * accepted.
+   */
+  attachments: AttachmentsSchema.default([]),
 });
 
 /** First line of the opening message, trimmed to something that fits a list row. */
@@ -98,7 +109,9 @@ export async function postCompletion(req: Request, res: Response): Promise<void>
     },
     orderBy: { createdAt: 'desc' },
     take: HISTORY_LIMIT,
-    select: { role: true, content: true },
+    // `attachments` too: a follow-up question about a photo needs the photo, and
+    // toChatMessages decides how many of them are worth re-sending.
+    select: { role: true, content: true, attachments: true },
   });
 
   const now = new Date();
@@ -140,7 +153,18 @@ export async function postCompletion(req: Request, res: Response): Promise<void>
     ? { userMessage: null, assistantMessage: { id: replacing.id } }
     : await prisma.$transaction(async (tx) => {
         const stored = await tx.message.create({
-          data: { conversationId, role: 'user', content: body.text, status: 'complete' },
+          data: {
+            conversationId,
+            role: 'user',
+            content: body.text,
+            status: 'complete',
+            /*
+             * Stored so a reload shows the turn with its attachments still on it. Only
+             * when there are some: `DbNull` keeps "sent before attachments existed"
+             * distinct from "sent with none", the way `sources` does.
+             */
+            attachments: body.attachments.length > 0 ? body.attachments : Prisma.DbNull,
+          },
         });
         const placeholder = await tx.message.create({
           data: { conversationId, role: 'assistant', content: '', status: 'incomplete', model },
@@ -183,7 +207,13 @@ export async function postCompletion(req: Request, res: Response): Promise<void>
       messages: [
         { role: 'system', content: systemPrompt(profile, searchAllowed) },
         ...toChatMessages(history.reverse()),
-        { role: 'user', content: body.text },
+        /*
+         * A plain string when nothing is attached, an array of parts when something is
+         * -- which is what carries an image to the model as a URL it fetches rather
+         * than as text. Attached document text is fenced as data inside it; see
+         * toContentParts.
+         */
+        { role: 'user', content: toContentParts(body.text, body.attachments) },
       ],
       searchAllowed,
       onDelta: (delta) => send(res, { type: 'delta', text: delta }),

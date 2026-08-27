@@ -61,6 +61,10 @@ model Message {
   /// Web sources consulted for this reply. Null on a reply generated before search
   /// existed, which is a different thing from an empty list (searched, found nothing).
   sources        Json?
+  /// Photos and files the user attached to this turn, as the upload pipeline left them
+  /// (server/src/attachments.ts). URLs and extracted text only -- never the file. Null
+  /// on a turn sent before attachments existed.
+  attachments    Json?
   createdAt      DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
   conversation   Conversation  @relation(fields: [conversationId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 

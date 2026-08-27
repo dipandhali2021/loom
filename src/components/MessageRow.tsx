@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
-import { Animated, Easing, StyleSheet, View } from 'react-native';
+import { Animated, Easing, Image, StyleSheet, View } from 'react-native';
 import { AppText } from './AppText';
+import { Icon } from './Icon';
 import { ThinkingIndicator } from './ThinkingIndicator';
 import { MessageActions } from './MessageActions';
 import { Markdown } from './Markdown';
@@ -87,28 +88,65 @@ function MessageRowBase({ message }: { message: Message }) {
   const waiting = streaming && (message.text.length === 0 || !!message.tool);
 
   if (isUser) {
+    const attachments = message.attachments ?? [];
     return (
       <FadeIn style={styles.userRow}>
-        <View
-          style={[
-            styles.bubble,
-            {
-              backgroundColor: colors.bubbleUser,
-              borderColor: colors.bubbleUserBorder,
-            },
-          ]}
-        >
-          {/* The capsule is a light surface in both schemes, so its label takes
-              its own colour rather than the page's primary label. */}
-          <AppText
-            variant="chatBubble"
-            tone="none"
-            style={{ color: colors.bubbleUserText }}
-            selectable
+        {/*
+         * Above the capsule, not inside it: a photo has no business inheriting the
+         * bubble's padding, and the transcript should show what was sent as plainly
+         * as the composer showed it going out. The first pipeline URL is the image
+         * the model was given, so this is literally what it saw.
+         */}
+        {attachments.length > 0 ? (
+          <View style={styles.attachments}>
+            {attachments.map((item) =>
+              item.kind === 'image' && item.images.length > 0 ? (
+                <Image
+                  key={item.id}
+                  source={{ uri: item.images[0] }}
+                  style={[styles.attachThumb, { backgroundColor: colors.fillQuaternary }]}
+                  resizeMode="cover"
+                  accessibilityLabel={item.name}
+                />
+              ) : (
+                // A document is its name: the page render says nothing a filename
+                // does not say better, and the name is what the reply refers to.
+                <View
+                  key={item.id}
+                  style={[styles.attachFile, { backgroundColor: colors.fillQuaternary }]}
+                >
+                  <Icon name="file-02" size={16} color={colors.labelSecondary} />
+                  <AppText variant="footnote" tone="secondary" numberOfLines={1}>
+                    {item.name}
+                  </AppText>
+                </View>
+              ),
+            )}
+          </View>
+        ) : null}
+
+        {message.text.length > 0 ? (
+          <View
+            style={[
+              styles.bubble,
+              {
+                backgroundColor: colors.bubbleUser,
+                borderColor: colors.bubbleUserBorder,
+              },
+            ]}
           >
-            {message.text}
-          </AppText>
-        </View>
+            {/* The capsule is a light surface in both schemes, so its label takes
+              its own colour rather than the page's primary label. */}
+            <AppText
+              variant="chatBubble"
+              tone="none"
+              style={{ color: colors.bubbleUserText }}
+              selectable
+            >
+              {message.text}
+            </AppText>
+          </View>
+        ) : null}
       </FadeIn>
     );
   }
@@ -173,6 +211,25 @@ const styles = StyleSheet.create({
     alignItems: 'flex-end',
     paddingHorizontal: layout.chatPadding,
     paddingTop: layout.turnGap,
+  },
+  // Right-aligned with the capsule, wrapping onto a second row past three or four.
+  attachments: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'flex-end',
+    gap: 6,
+    maxWidth: '78%',
+    marginBottom: 6,
+  },
+  attachThumb: { width: 88, height: 88, borderRadius: 12 },
+  attachFile: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    maxWidth: 220,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 12,
   },
   bubble: {
     // The kit caps the capsule at ~78% of the frame so long turns still wrap.

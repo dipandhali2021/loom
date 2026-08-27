@@ -155,6 +155,35 @@ const EnvSchema = z.object({
     .regex(/^\d+(GB|MB|kB|GiB|MiB|KiB)$/, 'Expected a size like "400MB" or "1GiB".')
     .default('400MB')
     .transform((value) => value as SandboxMemory),
+  /*
+   * --- Attachment uploads (Transloadit) -------------------------------------
+   *
+   * Optional, exactly like the sandbox block above: without a key pair the
+   * /uploads route reports itself unavailable and everything else still boots.
+   * A developer who has not signed up for Transloadit gets a working chat that
+   * cannot take attachments, rather than a server that refuses to start.
+   */
+
+  /** Public Auth Key. Signed requests carry it in the clear; it is not the secret. */
+  TRANSLOADIT_KEY: optionalText,
+  /**
+   * Auth Secret, used only to sign request params. Server-only, like
+   * CLERK_SECRET_KEY and AI_API_KEY: it never reaches the app, a log line or a
+   * client-visible error.
+   */
+  TRANSLOADIT_SECRET: optionalText,
+  /**
+   * The saved Template an upload runs through. Held in env rather than the
+   * source so the pipeline can be edited in Transloadit's console and re-pointed
+   * here without a deploy.
+   */
+  TRANSLOADIT_TEMPLATE_ID: z.string().min(1).default('d614e494f87245628e6ae1e8e989aa33'),
+  /**
+   * Ceiling on one attachment, in bytes. Enforced by the route before a byte
+   * reaches Transloadit, so a large file is refused here rather than spending
+   * upload minutes to be refused there.
+   */
+  UPLOAD_MAX_BYTES: z.coerce.number().int().min(1).max(50_000_000).default(20_000_000),
 });
 
 const parsed = EnvSchema.safeParse(process.env);
@@ -208,5 +237,14 @@ export const sandboxEnabled = Boolean(env.DENO_DEPLOY_TOKEN);
  * without having searched.
  */
 export const webSearchEnabled = env.WEB_SEARCH;
+
+/**
+ * Whether attachment uploads are configured at all.
+ *
+ * Both halves of the pair or neither: a key with no secret cannot sign a request,
+ * and reporting the feature available would turn a missing credential into an
+ * upload that fails at the last moment.
+ */
+export const uploadsEnabled = Boolean(env.TRANSLOADIT_KEY && env.TRANSLOADIT_SECRET);
 
 export const appModelIds = Object.keys(aiModels) as [AppModelId, ...AppModelId[]];

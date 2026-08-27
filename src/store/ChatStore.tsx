@@ -20,6 +20,7 @@ import {
   listConversations,
   streamCompletion,
   streamTemporaryCompletion,
+  type ApiAttachment,
   type ApiConversation,
   type GetToken,
   type TemporaryTurn,
@@ -35,6 +36,20 @@ import { createReveal } from '../lib/reveal';
  * same bound the stored path applies from its own table (HISTORY_LIMIT there).
  */
 const TEMPORARY_HISTORY_LIMIT = 30;
+
+/**
+ * Stands in for a question that is only a file.
+ *
+ * The server requires text -- a turn with none is a 400 -- and "here is a photo" with
+ * nothing else said is a real thing a user does. Naming the files is better than a
+ * fixed sentence: the reply then already knows which of the two PDFs is meant.
+ */
+function describeAttachments(attachments: ApiAttachment[]): string {
+  const names = attachments.map((a) => a.name).join(', ');
+  return attachments.length === 1
+    ? `Have a look at ${names}.`
+    : `Have a look at these files: ${names}.`;
+}
 
 /*
  * Bumped from v1: `signedIn` / `emailVerified` / `email` used to be persisted here.
@@ -93,7 +108,11 @@ type ChatStoreValue = PersistedState & {
   isStreaming: boolean;
   newConversation: () => string;
   openConversation: (id: string) => void;
-  sendMessage: (text: string) => void;
+  /**
+   * Sends one turn. `attachments` are already-uploaded results, not local files:
+   * the composer uploads as they are picked, so sending never waits on a pipeline.
+   */
+  sendMessage: (text: string, attachments?: ApiAttachment[]) => void;
   /** Re-runs the reply for an assistant turn, driving the action row's refresh button. */
   regenerate: (messageId: string) => void;
   stopStreaming: () => void;
@@ -305,6 +324,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
         // Spread rather than assigned: a reply that never searched has no `sources`,
         // and writing `undefined` into the key would make the two indistinguishable.
         ...(m.sources ? { sources: m.sources } : {}),
+        ...(m.attachments ? { attachments: m.attachments } : {}),
         // A reply still marked pending server-side was cut off, not still running.
         createdAt: m.createdAt,
       })),
@@ -376,6 +396,8 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       userMessageId?: string;
       prompt: string;
       model: ModelId;
+      /** This turn's photos and files, as the pipeline returned them. */
+      attachments?: ApiAttachment[];
       /** Arms the web_search tool for this turn. */
       search?: boolean;
       regenerateRemoteId?: string;
@@ -414,6 +436,9 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           conversationId: remoteConversationId,
           text: prompt,
           model,
+          ...(args.attachments && args.attachments.length > 0
+            ? { attachments: args.attachments }
+            : {}),
           ...(args.search ? { search: true } : {}),
           ...(args.regenerateRemoteId ? { regenerateMessageId: args.regenerateRemoteId } : {}),
           signal: controller.signal,
@@ -548,6 +573,8 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       prompt: string;
       history: TemporaryTurn[];
       model: ModelId;
+      /** This turn's photos and files, as the pipeline returned them. */
+      attachments?: ApiAttachment[];
       /** Arms the web_search tool for this turn. */
       search?: boolean;
     }) => {
@@ -575,6 +602,9 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           text: prompt,
           model,
           history,
+          ...(args.attachments && args.attachments.length > 0
+            ? { attachments: args.attachments }
+            : {}),
           ...(args.search ? { search: true } : {}),
           signal: controller.signal,
         })) {
@@ -665,16 +695,26 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
    * prompt.
    */
   const sendTemporaryMessage = useCallback(
-    (text: string) => {
+    (text: string, attachments?: ApiAttachment[]) => {
       clearTimer();
 
       const history: TemporaryTurn[] = temporaryMessages
         .filter((m) => !m.pending && !m.error && m.text.trim().length > 0)
         .slice(-TEMPORARY_HISTORY_LIMIT)
-        .map((m) => ({ role: m.role, text: m.text }));
+        .map((m) => ({
+          role: m.role,
+          text: m.text,
+          ...(m.attachments ? { attachments: m.attachments } : {}),
+        }));
 
       const now = Date.now();
-      const userMessage: Message = { id: createId('msg'), role: 'user', text, createdAt: now };
+      const userMessage: Message = {
+        id: createId('msg'),
+        role: 'user',
+        text,
+        ...(attachments && attachments.length > 0 ? { attachments } : {}),
+        createdAt: now,
+      };
       const replyId = createId('msg');
       setTemporaryMessages((prev) => [
         ...prev,
@@ -687,6 +727,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
         prompt: text,
         history,
         model: state.model,
+        ...(attachments && attachments.length > 0 ? { attachments } : {}),
         search: webSearch,
       });
     },
@@ -714,9 +755,16 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   );
 
   const sendMessage = useCallback(
-    (rawText: string) => {
+    (rawText: string, attachments?: ApiAttachment[]) => {
       const text = rawText.trim();
-      if (!text) return;
+      const attached = attachments && attachments.length > 0 ? attachments : undefined;
+      /*
+       * An attachment on its own is a turn: "what is this" is often the photo, and
+       * the composer already lets it be sent with an empty field. The server still
+       * needs words, so a caption stands in when there are none.
+       */
+      const prompt = text || (attached ? describeAttachments(attached) : '');
+      if (!prompt) return;
       /*
        * The fork for temporary mode is here, at the top, before anything touches
        * `state`. Everything below this line writes a conversation and a pair of
@@ -724,13 +772,19 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
        * a temporary turn, so it never reaches it.
        */
       if (temporary) {
-        sendTemporaryMessage(text);
+        sendTemporaryMessage(prompt, attached);
         return;
       }
       clearTimer();
 
       const now = Date.now();
-      const userMessage: Message = { id: createId('msg'), role: 'user', text, createdAt: now };
+      const userMessage: Message = {
+        id: createId('msg'),
+        role: 'user',
+        text: prompt,
+        ...(attached ? { attachments: attached } : {}),
+        createdAt: now,
+      };
       const replyId = createId('msg');
       const assistantMessage: Message = {
         id: replyId,
@@ -743,7 +797,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       // Both turns render immediately; the request follows. Typing should never
       // wait on a round trip, and the pending reply is what shows the dot.
       let targetId = state.activeId;
-      let title = deriveTitle(text);
+      let title = deriveTitle(prompt);
       setState((prev) => {
         let conversations = prev.conversations;
         let activeId = prev.activeId;
@@ -770,7 +824,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           conversations: conversations.map((c) => {
             if (c.id !== activeId) return c;
             const first = c.messages.length === 0;
-            title = first ? deriveTitle(text) : c.title;
+            title = first ? deriveTitle(prompt) : c.title;
             return {
               ...c,
               title,
@@ -792,8 +846,9 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
             remoteConversationId,
             replyId,
             userMessageId: userMessage.id,
-            prompt: text,
+            prompt,
             model: state.model,
+            ...(attached ? { attachments: attached } : {}),
             search: webSearch,
           });
         } catch (error) {
@@ -840,7 +895,9 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
         // assuming it is the row directly above -- which it is today, and need not be.
         const askedAt = priorTurns.map((m) => m.role).lastIndexOf('user');
         if (askedAt === -1) return;
-        const prompt = priorTurns[askedAt].text;
+        const asked = priorTurns[askedAt];
+        const prompt = asked.text;
+        const attachments = asked.attachments;
 
         // Everything before that question, which is the same cutoff the server applies
         // to its own history when rewriting a stored reply.
@@ -848,7 +905,11 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           .slice(0, askedAt)
           .filter((m) => !m.pending && !m.error && m.text.trim().length > 0)
           .slice(-TEMPORARY_HISTORY_LIMIT)
-          .map((m) => ({ role: m.role, text: m.text }));
+          .map((m) => ({
+            role: m.role,
+            text: m.text,
+            ...(m.attachments ? { attachments: m.attachments } : {}),
+          }));
 
         setTemporaryMessages([
           ...priorTurns,
@@ -869,6 +930,9 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           prompt,
           history,
           model: state.model,
+          // The same files the question carried: re-answering it without them would
+          // be answering a different question.
+          ...(attachments && attachments.length > 0 ? { attachments } : {}),
           search: webSearch,
         });
         return;
@@ -884,9 +948,10 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       if (!target || target.role !== 'assistant') return;
 
       // Re-answer the user turn this reply belongs to.
-      const prompt = [...conversation.messages.slice(0, index)]
+      const asked = [...conversation.messages.slice(0, index)]
         .reverse()
-        .find((m) => m.role === 'user')?.text;
+        .find((m) => m.role === 'user');
+      const prompt = asked?.text;
       if (!prompt) return;
 
       /*
@@ -933,6 +998,9 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
         replyId: messageId,
         prompt,
         model: state.model,
+        ...(asked?.attachments && asked.attachments.length > 0
+          ? { attachments: asked.attachments }
+          : {}),
         search: webSearch,
         regenerateRemoteId: remoteMessageId,
       });

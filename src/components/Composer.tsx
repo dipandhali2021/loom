@@ -1,5 +1,5 @@
 import React from 'react';
-import { Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { ActivityIndicator, Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import Animated, {
@@ -10,6 +10,10 @@ import Animated, {
 } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import { Icon } from './Icon';
+import { AttachmentChips } from './AttachmentChips';
+import { AppText } from './AppText';
+import type { PendingAttachment } from '../store/types';
+import { palette } from '../theme/tokens';
 import { useTheme } from '../theme/ThemeProvider';
 import { useChatStore } from '../store/ChatStore';
 import { layout, type as typeTokens } from '../theme/tokens';
@@ -46,6 +50,22 @@ type Props = {
   webSearch?: boolean;
   /** The chip's own off switch, so turning it off does not need the panel. */
   onDisableWebSearch?: () => void;
+  /** Files picked for this turn, shown as tiles above the pill. */
+  attachments?: PendingAttachment[];
+  onRemoveAttachment?: (id: string) => void;
+  /**
+   * Dictation, driven by the mic glyph inside the pill -- not the trailing button,
+   * which is voice mode and a screen of its own. The screen owns the recorder so
+   * this stays a presentational bar.
+   */
+  dictation?: {
+    phase: 'idle' | 'recording' | 'transcribing';
+    durationMillis: number;
+    error: string | null;
+    toggle: () => void;
+    cancel: () => void;
+    clearError: () => void;
+  };
 };
 
 /**
@@ -54,6 +74,12 @@ type Props = {
  * same destination reached the long way round.
  */
 const CROSS_ROTATION = 135;
+
+/** m:ss, so a long dictation still reads at a glance. */
+function formatDuration(ms: number): string {
+  const total = Math.floor(ms / 1000);
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+}
 const ROTATE_MS = 240;
 const EASE_OUT = Easing.bezier(0.22, 1, 0.36, 1);
 
@@ -77,11 +103,23 @@ export function Composer({
   onFocusField,
   webSearch = false,
   onDisableWebSearch,
+  attachments = [],
+  onRemoveAttachment,
+  dictation,
 }: Props) {
   const { colors } = useTheme();
   const { hapticsEnabled } = useChatStore();
 
   const hasText = text.trim().length > 0;
+  /*
+   * A file on its own is a sendable turn -- "what is this" is usually the photo --
+   * so the trailing button becomes send once one is ready, the same way text does.
+   * Only once it is ready: sending mid-upload would post a turn with nothing attached.
+   */
+  const hasAttachment = attachments.some((a) => a.status === 'ready');
+  const canSend = hasText || hasAttachment;
+  const recording = dictation?.phase === 'recording';
+  const transcribing = dictation?.phase === 'transcribing';
 
   /*
    * Driven off the prop rather than off local state: the panel can also be closed
@@ -104,7 +142,7 @@ export function Composer({
 
   const submit = () => {
     const value = text.trim();
-    if (!value) return;
+    if (!value && !hasAttachment) return;
     tap();
     setText('');
     onSubmit(value);
@@ -117,7 +155,7 @@ export function Composer({
         onPress: onStop,
         glyph: <MaterialIcons name="stop" size={20} color={colors.sendGlyph} />,
       }
-    : hasText
+    : canSend
       ? {
           label: 'Send message',
           onPress: submit,
@@ -131,6 +169,33 @@ export function Composer({
 
   return (
     <View style={styles.row}>
+      <AttachmentChips attachments={attachments} onRemove={onRemoveAttachment ?? (() => {})} />
+
+      {/*
+       * The running timer, above the pill rather than inside it: the field keeps its
+       * placeholder and its full width while recording, because dictation appends to
+       * a draft that may already be half written.
+       */}
+      {recording ? (
+        <View style={styles.status}>
+          <View style={[styles.pulse, { backgroundColor: palette.danger }]} />
+          <AppText variant="footnote" tone="secondary">
+            {`Listening  ${formatDuration(dictation?.durationMillis ?? 0)}`}
+          </AppText>
+          <AppText variant="footnote" tone="tertiary">
+            Tap to stop
+          </AppText>
+        </View>
+      ) : null}
+
+      {dictation?.error ? (
+        <Pressable onPress={dictation.clearError} style={styles.status}>
+          <AppText variant="footnote" tone="none" style={{ color: palette.danger }}>
+            {dictation.error}
+          </AppText>
+        </Pressable>
+      ) : null}
+
       <View style={[styles.pill, { backgroundColor: colors.composerFill }]}>
         <Pressable
           onPress={() => {
@@ -186,14 +251,43 @@ export function Composer({
           accessibilityLabel={placeholder}
         />
 
+        {/*
+         * Dictation, not voice mode. It writes into the field above and stops there:
+         * the user reads what came back and edits it before deciding to send, which
+         * is the whole difference between the two -- and why this one lives inside
+         * the pill next to the text it produces.
+         */}
         <Pressable
-          onPress={tap}
+          onPress={() => {
+            if (transcribing) return;
+            tap();
+            dictation?.toggle();
+          }}
+          onLongPress={() => {
+            if (!recording) return;
+            tap();
+            dictation?.cancel();
+          }}
           hitSlop={8}
           style={styles.glyph}
+          disabled={transcribing}
           accessibilityRole="button"
-          accessibilityLabel="Dictate"
+          accessibilityLabel={
+            recording ? 'Stop dictation' : transcribing ? 'Transcribing' : 'Dictate'
+          }
+          accessibilityHint={recording ? 'Press and hold to discard' : undefined}
         >
-          <Feather name="mic" size={20} color={colors.labelSecondary} />
+          {transcribing ? (
+            <ActivityIndicator size="small" color={colors.labelSecondary} />
+          ) : (
+            <Feather
+              name={recording ? 'square' : 'mic'}
+              size={recording ? 16 : 20}
+              // Red while it is live: it is the one control in the bar that is
+              // recording the room, and it should not look like the others.
+              color={recording ? palette.danger : colors.labelSecondary}
+            />
+          )}
         </Pressable>
 
         <Pressable
@@ -212,6 +306,15 @@ export function Composer({
 
 const styles = StyleSheet.create({
   row: { paddingHorizontal: layout.chatPadding },
+  // One line above the pill, for the recording timer and for a failure worth reading.
+  status: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 4,
+    paddingBottom: 6,
+  },
+  pulse: { width: 8, height: 8, borderRadius: 4 },
   pill: {
     flexDirection: 'row',
     // Centred, not bottom-aligned: the field's minHeight is taller than the
