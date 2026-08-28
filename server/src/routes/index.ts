@@ -4,6 +4,7 @@ import { requireAuth, withUser } from '../auth.ts';
 import { conversationsRouter } from './conversations.ts';
 import { executeRouter } from './execute.ts';
 import { meRouter } from './me.ts';
+import { modelsRouter } from './models.ts';
 import { profileRouter } from './profile.ts';
 import { temporaryRouter } from './temporary.ts';
 import { transcribeRouter } from './transcribe.ts';
@@ -16,6 +17,12 @@ export const apiRouter = Router();
 apiRouter.use(requireAuth, withUser);
 
 apiRouter.use('/me', meRouter);
+/*
+ * The model catalog, read from the proxy. Behind the same auth as everything else:
+ * the response is small and not secret, but the upstream call it makes spends a
+ * request against our key.
+ */
+apiRouter.use('/models', modelsRouter);
 apiRouter.use('/profile', profileRouter);
 apiRouter.use('/conversations', conversationsRouter);
 apiRouter.use('/execute', executeRouter);

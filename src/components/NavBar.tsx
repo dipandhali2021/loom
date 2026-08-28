@@ -9,15 +9,11 @@ import Animated, {
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Icon } from './Icon';
-import { AppText } from './AppText';
 import { useTheme } from '../theme/ThemeProvider';
 import { layout } from '../theme/tokens';
 
 type Props = {
-  /** Model label shown after the "ChatGPT" wordmark, e.g. "4". */
-  modelBadge?: string;
   onPressMenu?: () => void;
-  onPressTitle?: () => void;
   onPressEdit?: () => void;
   onPressMore?: () => void;
   /**
@@ -205,20 +201,24 @@ function TrailingSlot({
 }
 
 /**
- * Chat nav bar in the shipping app's arrangement: hamburger on the left with
- * "ChatGPT <model> ›" sitting directly beside it, and the compose + overflow
- * pair on the right. The icons are 42pt, which is what pushes the bar to
- * `chatNavBarHeight`'s 50.
+ * Chat nav bar: the hamburger on the left, the compose + overflow pair on the
+ * right, and nothing between them. The icons are 42pt, which is what pushes the
+ * bar to `chatNavBarHeight`'s 50.
+ *
+ * The wordmark and the model name used to sit beside the hamburger. Both are gone:
+ * the model is a property of the message being written, so it moved into the
+ * composer's control row, where it is next to the field it applies to and can be
+ * changed without crossing the screen. A bar that names the model while stating
+ * nothing else about the turn is decoration, and the app's own title is not news
+ * to someone already inside it -- so the slot is empty rather than refilled.
  *
  * The bar has no background of its own -- the transcript runs full-screen beneath
  * it and dissolves into `TopFade`'s gradient, which is what the screen composes
  * behind this. Only the icon groups are filled.
  */
 export function NavBar({
-  modelBadge = '4',
   onPressMenu,
   onPressEdit,
-  onPressTitle,
   onPressMore,
   showTemporary = false,
   temporary = false,
@@ -230,35 +230,11 @@ export function NavBar({
   return (
     <View style={[styles.row, { paddingTop: insets.top }]}>
       <View style={styles.bar}>
-        {/* Menu and title travel together on the left, as one leading group. */}
-        <View style={styles.leading}>
-          <Group>
-            <IconButton onPress={onPressMenu} label="Open chat history">
-              <Icon name="menu" size={25} color={colors.labelPrimary} />
-            </IconButton>
-          </Group>
-
-          <Pressable
-            onPress={onPressTitle}
-            hitSlop={10}
-            style={styles.title}
-            accessibilityRole="button"
-            accessibilityLabel={`ChatGPT ${modelBadge}, change model`}
-          >
-            {/* The app draws the wordmark at full strength and the model number
-                a step back, so the pair reads as one label with a qualifier. */}
-            <AppText variant="navTitle">ChatGPT</AppText>
-            <AppText variant="navTitle" tone="secondary" style={styles.badge}>
-              {modelBadge}
-            </AppText>
-            <Icon
-              name="chevron-left"
-              size={15}
-              color={colors.labelSecondary}
-              style={styles.chevron}
-            />
-          </Pressable>
-        </View>
+        <Group>
+          <IconButton onPress={onPressMenu} label="Open chat history">
+            <Icon name="menu" size={25} color={colors.labelPrimary} />
+          </IconButton>
+        </Group>
 
         <TrailingSlot
           showTemporary={showTemporary}
@@ -313,13 +289,4 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
   },
-  // 12pt between the hamburger's circle and the wordmark: the circle carries its
-  // own padding, so the old 14pt gap read as too much air.
-  leading: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  title: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  // The model number carries its own gap, so the chevron sits tight after it.
-  badge: { marginRight: 1 },
-  // The design uses SF Symbol `chevron.right`; the exported glyph points left,
-  // so it is rotated to match.
-  chevron: { transform: [{ rotate: '180deg' }] },
 });

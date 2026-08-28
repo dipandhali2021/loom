@@ -51,8 +51,6 @@ type Props = {
    * by the time the screen hears about it.
    */
   collapseMs?: number;
-  webSearch: boolean;
-  onToggleWebSearch: (on: boolean) => void;
   /**
    * Opens the system photo picker. Resolves with a note to show under the row when
    * the pick could not happen -- the per-message cap, most often -- and `null` when
@@ -77,8 +75,6 @@ export function AttachmentSheet({
   height,
   onClose,
   collapseMs,
-  webSearch,
-  onToggleWebSearch,
   onPickPhotos,
   onPickFiles,
 }: Props) {
@@ -191,7 +187,7 @@ export function AttachmentSheet({
   }));
   /*
    * The rows fade on a shorter curve than the box, so a half-collapsed panel reads
-   * as leaving rather than as three rows being squashed.
+   * as leaving rather than as its rows being squashed.
    */
   const bodyStyle = useAnimatedStyle(() => ({
     opacity: Math.min(1, Math.max(0, progress.value * 1.6 - 0.6)),
@@ -216,43 +212,19 @@ export function AttachmentSheet({
            */}
           <Row icon="image" label="Photos" onPress={() => pick(onPickPhotos)} />
           <Row icon="file-02" label="Files" onPress={() => pick(onPickFiles)} />
-
-          <View style={[styles.divider, { backgroundColor: colors.separatorNonOpaque }]} />
-
-          {/*
-           * No switch. The row is the control -- one tap, the way Photos and Files
-           * are one tap -- and the state is said by the row filling in and a tick
-           * appearing, which is how a selected item reads everywhere else in the
-           * app. A switch beside a full-width pressable row that does the same
-           * thing is two targets for one setting.
-           */}
-          <Row
-            icon="globe-01"
-            label="Web search"
-            on={webSearch}
-            onPress={() => onToggleWebSearch(!webSearch)}
-            note={
-              webSearch
-                ? 'Replies can look things up and cite what they used'
-                : 'Replies answer from what the model already knows'
-            }
-          />
         </Animated.View>
       </Animated.View>
     </GestureDetector>
   );
 }
 
-/** One line of the panel: glyph, label, a note under it, and a tick when it is on. */
+/** One line of the panel: glyph, label, and a note under it when something failed. */
 function Row({
   icon,
   label,
   onPress,
-  on,
-  note,
-  disabledNote,
 }: {
-  icon: 'image' | 'file-02' | 'globe-01';
+  icon: 'image' | 'file-02';
   label: string;
   /**
    * The row's action. Resolving with a string shows it as the row's note, which is
@@ -260,59 +232,38 @@ function Row({
    * the user just pressed is where they are already looking.
    */
   onPress: () => void | Promise<string | null>;
-  /**
-   * Given only for a row that is a setting rather than an action. `undefined`
-   * leaves the row stateless, which is what Photos and Files are -- they open
-   * something, so there is nothing for them to be on.
-   */
-  on?: boolean;
-  note?: string;
-  /** Shown in place of `note` once pressed, for a row with nothing behind it yet. */
-  disabledNote?: string;
 }) {
   const { colors } = useTheme();
-  const [pressedUnavailable, setPressedUnavailable] = useState(false);
-  // What the action itself reported, which outranks both of the static notes.
+  // What the action reported. The only note a row has now -- both rows open a
+  // picker, so there is no state for either of them to describe at rest.
   const [failure, setFailure] = useState<string | null>(null);
-
-  const subtitle = failure ?? (pressedUnavailable ? disabledNote : note);
-  const toggles = on !== undefined;
 
   return (
     <Pressable
       onPress={() => {
-        if (disabledNote) setPressedUnavailable(true);
         setFailure(null);
         const result = onPress();
         if (result) void result.then(setFailure).catch(() => setFailure('That did not work.'));
       }}
       style={({ pressed }) => [
         styles.row,
-        {
-          // The armed fill stays while the finger is down, so pressing an already-on
-          // row does not read as it switching off before the tap has landed.
-          backgroundColor: on || pressed ? colors.rowActive : 'transparent',
-        },
+        { backgroundColor: pressed ? colors.rowActive : 'transparent' },
       ]}
-      // Still a switch to a screen reader even without one drawn: the row is a
-      // two-state setting, and announcing it as a button loses the state.
-      accessibilityRole={toggles ? 'switch' : 'button'}
+      accessibilityRole="button"
       accessibilityLabel={label}
-      {...(toggles ? { accessibilityState: { checked: on } } : {})}
-      {...(subtitle ? { accessibilityHint: subtitle } : {})}
+      {...(failure ? { accessibilityHint: failure } : {})}
     >
       <Icon name={icon} size={22} color={colors.labelPrimary} />
       <View style={styles.rowText}>
         <AppText variant="bodyRegular" numberOfLines={1}>
           {label}
         </AppText>
-        {subtitle ? (
+        {failure ? (
           <AppText variant="footnote" tone="tertiary" numberOfLines={1}>
-            {subtitle}
+            {failure}
           </AppText>
         ) : null}
       </View>
-      {on ? <Icon name="check" size={18} color={colors.labelPrimary} /> : null}
     </Pressable>
   );
 }
@@ -352,9 +303,4 @@ const styles = StyleSheet.create({
     borderRadius: 12,
   },
   rowText: { flex: 1, gap: 1 },
-  divider: {
-    height: StyleSheet.hairlineWidth,
-    marginVertical: 6,
-    marginHorizontal: 8,
-  },
 });

@@ -12,7 +12,22 @@ export const conversationsRouter = Router();
 const Title = z.string().trim().max(200);
 
 const CreateConversationBody = z.object({ title: Title.optional() });
-const UpdateConversationBody = z.object({ title: Title.nullable() });
+
+/**
+ * Both fields optional, and at least one required.
+ *
+ * `title` stays nullable -- clearing a title is a real edit. It is no longer required,
+ * though, so pinning a chat does not mean sending its title back unchanged and racing
+ * a rename against it.
+ */
+const UpdateConversationBody = z
+  .object({
+    title: Title.nullable().optional(),
+    pinned: z.boolean().optional(),
+  })
+  .refine((value) => Object.keys(value).length > 0, {
+    message: 'Provide at least one field to update.',
+  });
 
 const ListMessagesQuery = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(100),
@@ -67,7 +82,9 @@ conversationsRouter.get('/', async (req, res) => {
 
   const rows = await prisma.conversation.findMany({
     where: { userId: user.id },
-    orderBy: { updatedAt: 'desc' },
+    // Pinned first, then most recent, which is the order the list is drawn in. Done
+    // here rather than in the app so a paged list would still be right.
+    orderBy: [{ pinned: 'desc' }, { updatedAt: 'desc' }],
     include: {
       _count: { select: { messages: true } },
       messages: { orderBy: { createdAt: 'desc' }, take: 1, select: { content: true } },
@@ -105,13 +122,22 @@ conversationsRouter.get('/:conversationId', async (req, res) => {
 conversationsRouter.patch('/:conversationId', async (req, res) => {
   const user = currentUser(req);
   const conversationId = pathId(req.params.conversationId, 'Conversation');
-  const { title } = parseBody(UpdateConversationBody, req.body);
+  const patch = parseBody(UpdateConversationBody, req.body);
 
   await assertOwned(user.id, conversationId);
 
   const conversation = await prisma.conversation.update({
     where: { id: conversationId },
-    data: { title, ...touch },
+    /*
+     * Field by field, so a body that names one leaves the other alone -- a `title`
+     * spread unconditionally would write undefined over a pin, and Prisma would take
+     * the undefined as "no change" only by luck of how the object was built.
+     */
+    data: {
+      ...(patch.title !== undefined ? { title: patch.title } : {}),
+      ...(patch.pinned !== undefined ? { pinned: patch.pinned } : {}),
+      ...touch,
+    },
     include: { messages: { orderBy: { createdAt: 'asc' } } },
   });
 

@@ -25,6 +25,17 @@ export const palette = {
    * light and the dark surface, so it needs no per-scheme variant.
    */
   danger: '#FF3B30',
+  /** Find-in-chat match. iOS system yellow, the one colour a search hit ever is. */
+  findYellow: '#FFD60A',
+  /**
+   * The account avatar in the sidebar, and the only colour on that panel.
+   *
+   * It has to be a fixed colour rather than a token: an avatar is an identity
+   * mark, so it should not change when the scheme does, and it is the one thing
+   * in the drawer that must not read as a grey circle. Dark enough for white
+   * initials to clear contrast on it in both schemes.
+   */
+  avatarOrange: '#E9683A',
 } as const;
 
 export type ColorTokens = {
@@ -78,6 +89,17 @@ export type ColorTokens = {
   codeBorder: string;
   /** Selected row in a list (drawer history). */
   rowActive: string;
+  /**
+   * Find-in-chat: every other hit, and the one the chevrons are sitting on.
+   *
+   * The dim one is translucent so the text under it keeps its own colour and stays
+   * readable in both schemes; the current one is the solid yellow and takes
+   * `findMatchOnText` with it, because black on `#FFD60A` is the only pairing that
+   * works on a white page and a black one alike.
+   */
+  findMatch: string;
+  findMatchActive: string;
+  findMatchOnText: string;
   /** Submit / send affordance. */
   accent: string;
   accentOn: string;
@@ -111,6 +133,9 @@ export const lightColors: ColorTokens = {
   codeHeader: '#EDEDF0',
   codeBorder: '#D8D8DE',
   rowActive: 'rgba(120,120,128,0.18)',
+  findMatch: 'rgba(255,214,10,0.45)',
+  findMatchActive: palette.findYellow,
+  findMatchOnText: palette.black,
   accent: '#000000',
   accentOn: '#FFFFFF',
   green: palette.green,
@@ -150,6 +175,9 @@ export const darkColors: ColorTokens = {
   codeHeader: '#242424',
   codeBorder: '#3A3A3A',
   rowActive: '#1E1E1E',
+  findMatch: 'rgba(255,214,10,0.32)',
+  findMatchActive: palette.findYellow,
+  findMatchOnText: palette.black,
   accent: '#FFFFFF',
   accentOn: '#000000',
   green: palette.green,
@@ -304,6 +332,12 @@ export const layout = {
   composerFieldHeight: 40,
   composerPaddingV: 8,
   composerRadius: 28,
+  /**
+   * The focused pill, which is two rows tall. Half of that height would be a
+   * capsule again and the curve would cut into the control row's corners, so the
+   * radius stops relaxing at 24 -- still clearly a rounded card, not a box.
+   */
+  composerExpandedRadius: 24,
   /** Roughly four lines of `type.composer` before the field starts scrolling. */
   composerMaxHeight: 132,
   /** Round icon buttons inside the type box. */

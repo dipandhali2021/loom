@@ -5,6 +5,7 @@ import { Icon } from './Icon';
 import { ThinkingIndicator } from './ThinkingIndicator';
 import { MessageActions } from './MessageActions';
 import { Markdown } from './Markdown';
+import { Highlight } from './Highlight';
 import { useTheme } from '../theme/ThemeProvider';
 import { Message, ToolActivity } from '../store/types';
 import { layout, palette, type } from '../theme/tokens';
@@ -74,8 +75,20 @@ function toolLabel(tool: ToolActivity): string {
  * plain body text running the full width with an action row beneath it. Neither
  * side carries an avatar or a "You" / "ChatGPT" label any more — dropping them is
  * most of what removes the old layout's whitespace.
+ *
+ * `findQuery` marks a find-in-chat search inside the turn, and `findActiveStart` is
+ * the one occurrence the chevrons are on -- an offset rather than a boolean, because
+ * a single turn routinely holds several hits and only one of them is current.
  */
-function MessageRowBase({ message }: { message: Message }) {
+function MessageRowBase({
+  message,
+  findQuery,
+  findActiveStart,
+}: {
+  message: Message;
+  findQuery?: string;
+  findActiveStart?: number;
+}) {
   const { colors } = useTheme();
   const isUser = message.role === 'user';
   const streaming = !isUser && !!message.pending;
@@ -143,7 +156,7 @@ function MessageRowBase({ message }: { message: Message }) {
               style={{ color: colors.bubbleUserText }}
               selectable
             >
-              {message.text}
+              <Highlight text={message.text} query={findQuery} activeStart={findActiveStart} />
             </AppText>
           </View>
         ) : null}
@@ -167,6 +180,8 @@ function MessageRowBase({ message }: { message: Message }) {
            * once, and the layout settles for good.
            */
           sources={streaming ? undefined : message.sources}
+          findQuery={findQuery}
+          findActiveStart={findActiveStart}
         />
       ) : null}
 

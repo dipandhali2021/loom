@@ -6,9 +6,10 @@ import { AttachmentsSchema, toContentParts } from '../attachments.ts';
 import { currentUser } from '../auth.ts';
 import { prisma } from '../db.ts';
 import { toMessageDTO } from '../dto.ts';
-import { aiModels, appModelIds, webSearchEnabled } from '../env.ts';
+import { webSearchEnabled } from '../env.ts';
 import { HttpError, notFound, parseBody } from '../http.ts';
 import { Prisma } from '../generated/prisma/client.ts';
+import { resolveModel } from '../models.ts';
 import { HISTORY_LIMIT, systemPrompt, toChatMessages } from '../prompt.ts';
 import { openStream, send } from '../sse.ts';
 
@@ -23,8 +24,12 @@ import { openStream, send } from '../sse.ts';
 
 const CompletionBody = z.object({
   text: z.string().trim().min(1).max(32_000),
-  /** The app's tier, not a provider model id; env.ts maps it. */
-  model: z.enum(appModelIds).default('gpt-5'),
+  /**
+   * A model id from the proxy's catalog (GET /api/v1/models) -- checked against it
+   * rather than against a union here, which is what lets a model enabled upstream
+   * be usable without a deploy. Omitted means the server's default.
+   */
+  model: z.string().min(1).optional(),
   /**
    * Re-answer into an existing assistant row instead of appending a turn. Without
    * this, "regenerate" would store the same question twice and the next reply
@@ -115,7 +120,13 @@ export async function postCompletion(req: Request, res: Response): Promise<void>
   });
 
   const now = new Date();
-  const model = aiModels[body.model];
+  /*
+   * Resolved here, before any row is written and well before `openStream` -- an
+   * unknown model has to come back as a plain 400, and once headers are out the
+   * only way left to report it is an in-band error frame on a stream the client
+   * has already started rendering as a reply.
+   */
+  const model = await resolveModel(body.model);
 
   /*
    * Regenerating: the question is already stored, and its own row is the one being

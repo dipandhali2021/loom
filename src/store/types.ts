@@ -89,9 +89,21 @@ export type Conversation = {
   createdAt: number;
   updatedAt: number;
   archived: boolean;
+  /**
+   * Pinned to the top of the history list. Unlike `archived`, this one is a real
+   * column on the server, so it follows the account rather than the install.
+   */
+  pinned: boolean;
 };
 
-/** 'gpt-5' is the default the Apps UI Kit's nav bar shows; the older two stay selectable. */
-export type ModelId = 'gpt-3.5' | 'gpt-4' | 'gpt-5';
+/**
+ * A model id as the proxy names it, e.g. 'qwen-3.7-max-combo'.
+ *
+ * Deliberately not a union. The list is read from the server at run time
+ * (`listModels`), so a model enabled upstream has to be selectable without this
+ * file being edited -- which a union would forbid by construction. Kept as an
+ * alias rather than removed so the call sites still say what they mean.
+ */
+export type ModelId = string;
 
 export type VoiceName = 'Breeze' | 'Cove' | 'Sky' | 'Juniper' | 'Ember';

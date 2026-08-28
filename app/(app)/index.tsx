@@ -1,15 +1,21 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Alert,
   Keyboard,
   KeyboardAvoidingView,
+  LayoutChangeEvent,
   NativeScrollEvent,
   NativeSyntheticEvent,
   Platform,
   ScrollView,
+  Share,
   StyleSheet,
   TextInput,
   View,
 } from 'react-native';
+import Feather from '@expo/vector-icons/Feather';
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import * as Haptics from 'expo-haptics';
 import Animated, {
   Easing,
   useAnimatedStyle,
@@ -21,18 +27,21 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NavBar } from '../../src/components/NavBar';
 import { Composer } from '../../src/components/Composer';
 import { MessageRow } from '../../src/components/MessageRow';
-import { ModelPicker } from '../../src/components/ModelPicker';
+import { ModelSheet } from '../../src/components/ModelSheet';
 import { HistoryDrawer } from '../../src/components/HistoryDrawer';
 import { TopFade } from '../../src/components/TopFade';
 import { EmptyChat } from '../../src/components/EmptyChat';
 import { AttachmentSheet } from '../../src/components/AttachmentSheet';
+import { ChatMenu, type ChatMenuItem } from '../../src/components/ChatMenu';
+import { FindBar, FIND_BAR_HEIGHT } from '../../src/components/FindBar';
 import { useTheme } from '../../src/theme/ThemeProvider';
 import { useChatStore } from '../../src/store/ChatStore';
 import { useAttachments } from '../../src/lib/useAttachments';
 import { useDictation } from '../../src/lib/useDictation';
-import { layout } from '../../src/theme/tokens';
-
-const MODEL_LABEL = { 'gpt-3.5': '3.5', 'gpt-4': '4', 'gpt-5': '5' } as const;
+import { deriveModelLabel } from '../../src/lib/modelLabel';
+import { findMatches } from '../../src/lib/find';
+import { toShareText } from '../../src/lib/transcript';
+import { layout, palette } from '../../src/theme/tokens';
 
 /**
  * How far from the bottom still counts as "at the bottom".
@@ -98,7 +107,14 @@ export default function ChatScreen() {
     setTemporary,
     webSearch,
     setWebSearch,
+    models,
+    modelsLoaded,
+    refreshModels,
     authToken,
+    active,
+    setPinned,
+    deleteConversation,
+    hapticsEnabled,
   } = useChatStore();
 
   const [draft, setDraft] = useState('');
@@ -122,11 +138,34 @@ export default function ChatScreen() {
       setDraft((prev) => (prev.trim().length > 0 ? `${prev.replace(/\s+$/, '')} ${text}` : text));
     }, []),
   );
-  const [modelPickerOpen, setModelPickerOpen] = useState(false);
+  const [modelSheetOpen, setModelSheetOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
   const inputRef = useRef<TextInput | null>(null);
+
+  /*
+   * Find in chat. `findOpen` is the strip, `findQuery` what is in it, and `findAt`
+   * which hit the chevrons are on -- an index into `findHits` rather than a message
+   * id, because a single turn holds several hits and stepping has to walk them all.
+   */
+  const [findOpen, setFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState('');
+  const [findAt, setFindAt] = useState(0);
+
+  /*
+   * Where each turn sits in the transcript, so a hit can be scrolled to.
+   *
+   * A ref rather than state: it is written by every row's `onLayout`, and a row
+   * re-rendering on each of those writes is the transcript re-rendering while it is
+   * being laid out. Nothing reads it during render -- only a chevron does.
+   */
+  const rowOffsets = useRef(new Map<string, number>());
+
+  const onRowLayout = useCallback((id: string, event: LayoutChangeEvent) => {
+    rowOffsets.current.set(id, event.nativeEvent.layout.y);
+  }, []);
 
   /*
    * The keyboard's own height, so the attachment panel is exactly as tall as the
@@ -408,6 +447,189 @@ export default function ChatScreen() {
     requestAnimationFrame(() => requestAnimationFrame(follow));
   };
 
+  /*
+   * Every occurrence of the query, in reading order, recomputed as either changes.
+   *
+   * Over the transcript in hand rather than the stored conversation, so it searches
+   * the right list in temporary mode too -- and so a reply still streaming becomes
+   * searchable as it lands, which is what a reader scrolling back through a long
+   * answer actually wants.
+   */
+  const findHits = useMemo(
+    () => (findOpen ? findMatches(messages, findQuery) : []),
+    [findOpen, findQuery, messages],
+  );
+
+  /*
+   * Clamped rather than reset: a hit going away (the query grew, a reply was
+   * regenerated) should leave the chevrons somewhere valid, and holding an index past
+   * the end would show "12/4". Editing the query does start from the first hit again,
+   * which is what the effect below is keyed on.
+   */
+  const findIndex = findHits.length > 0 ? Math.min(findAt, findHits.length - 1) : 0;
+  const findHit = findHits[findIndex];
+
+  /** Scrolls a hit to just under the find bar, where the eye already is. */
+  const revealHit = useCallback(
+    (messageId: string) => {
+      const y = rowOffsets.current.get(messageId);
+      if (y === undefined) return;
+      // Following the stream and jumping to a hit are opposite intents; the jump wins
+      // until the user returns to the tail on their own.
+      stick.current = false;
+      /*
+       * The offsets are in content coordinates and the scroll view runs the full
+       * height of the screen, so scrolling straight to one would park the turn under
+       * the nav bar and the find strip. Both are subtracted, plus a little air.
+       */
+      const covering = insets.top + layout.chatNavBarHeight + FIND_BAR_HEIGHT + 8;
+      scrollRef.current?.scrollTo({ y: Math.max(0, y - covering), animated: true });
+    },
+    [insets.top],
+  );
+
+  /*
+   * Typing narrows the results, so the chevrons go back to the first of them.
+   *
+   * Paired with the write rather than watching for it in an effect: the two are one
+   * intent, and an effect would render the old index against the new query first.
+   */
+  const changeFindQuery = useCallback((next: string) => {
+    setFindQuery(next);
+    setFindAt(0);
+  }, []);
+
+  // Each step, and the first hit of a new query, brings its turn into view.
+  useEffect(() => {
+    if (findHit) revealHit(findHit.messageId);
+  }, [findHit, revealHit]);
+
+  const step = useCallback(
+    (by: 1 | -1) => {
+      if (findHits.length === 0) return;
+      // Wraps both ways: with four hits, "next" from the last is the first again,
+      // which is less surprising than a chevron that quietly stops working.
+      setFindAt((prev) => {
+        const from = Math.min(prev, findHits.length - 1);
+        return (from + by + findHits.length) % findHits.length;
+      });
+    },
+    [findHits.length],
+  );
+
+  const closeFind = useCallback(() => {
+    setFindOpen(false);
+    setFindQuery('');
+    setFindAt(0);
+    Keyboard.dismiss();
+  }, []);
+
+  /*
+   * The overflow menu's four items, built here because each of them is about this
+   * conversation and the menu itself is only a card.
+   *
+   * Pin and delete are unavailable in temporary mode, and that is not an oversight:
+   * a temporary chat has no row to pin and nothing stored to delete -- the toggle in
+   * the nav bar is what discards it. So the menu offers what it can actually do.
+   */
+  const pinned = !!active?.pinned;
+
+  const menuItems: ChatMenuItem[] = useMemo(() => {
+    const tap = () => {
+      if (hapticsEnabled && Platform.OS !== 'web') {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+      }
+    };
+
+    const items: ChatMenuItem[] = [
+      {
+        label: 'Share',
+        glyph: <Feather name="share" size={18} color={colors.labelPrimary} />,
+        onPress: () => {
+          tap();
+          /*
+           * The transcript as text. There is no share link to send -- nothing on the
+           * server publishes a conversation -- so this shares the words, which is the
+           * thing the user was going to paste anyway.
+           */
+          const message = toShareText(active?.title ?? '', messages);
+          if (message.length === 0) return;
+          Share.share({ message }).catch(() => {});
+        },
+      },
+    ];
+
+    if (!temporary && active) {
+      items.push({
+        label: pinned ? 'Unpin' : 'Pin',
+        glyph: (
+          <MaterialIcons
+            name="push-pin"
+            size={18}
+            color={colors.labelPrimary}
+            style={styles.pinGlyph}
+          />
+        ),
+        onPress: () => {
+          tap();
+          setPinned(active.id, !pinned);
+        },
+      });
+    }
+
+    items.push({
+      label: 'Find in chat',
+      glyph: <Feather name="search" size={18} color={colors.labelPrimary} />,
+      onPress: () => {
+        tap();
+        setFindOpen(true);
+      },
+    });
+
+    if (!temporary && active) {
+      items.push({
+        label: 'Delete',
+        destructive: true,
+        glyph: <Feather name="trash-2" size={18} color={palette.danger} />,
+        onPress: () => {
+          tap();
+          /*
+           * The one item that asks first. Deleting takes the conversation off the
+           * server as well as the device and there is no undo, so it gets the
+           * platform's own destructive dialog rather than a silent tap.
+           */
+          Alert.alert(
+            'Delete chat?',
+            'This removes it from every device you are signed in on. It cannot be undone.',
+            [
+              { text: 'Cancel', style: 'cancel' },
+              {
+                text: 'Delete',
+                style: 'destructive',
+                onPress: () => {
+                  closeFind();
+                  deleteConversation(active.id);
+                },
+              },
+            ],
+          );
+        },
+      });
+    }
+
+    return items;
+  }, [
+    active,
+    closeFind,
+    colors.labelPrimary,
+    deleteConversation,
+    hapticsEnabled,
+    messages,
+    pinned,
+    setPinned,
+    temporary,
+  ]);
+
   return (
     <View style={[styles.screen, { backgroundColor: colors.bgPrimary }]}>
       <KeyboardAvoidingView
@@ -424,7 +646,12 @@ export default function ChatScreen() {
             style={styles.flex}
             contentContainerStyle={[
               styles.transcript,
-              { paddingTop: insets.top + layout.chatNavBarHeight + 6 },
+              {
+                // The find strip sits over the transcript, so the top pad grows by
+                // its height while it is open rather than the strip pushing the list.
+                paddingTop:
+                  insets.top + layout.chatNavBarHeight + 6 + (findOpen ? FIND_BAR_HEIGHT : 0),
+              },
             ]}
             showsVerticalScrollIndicator={false}
             keyboardDismissMode="interactive"
@@ -442,7 +669,20 @@ export default function ChatScreen() {
             scrollEventThrottle={16}
           >
             {messages.map((message) => (
-              <MessageRow key={message.id} message={message} />
+              <View key={message.id} onLayout={(event) => onRowLayout(message.id, event)}>
+                <MessageRow
+                  message={message}
+                  /*
+                   * Only while the strip is open, and only the trimmed query: passing
+                   * a raw one would highlight on the space after a word and re-render
+                   * every turn for a keystroke that matched nothing new.
+                   */
+                  findQuery={findOpen ? findQuery.trim() || undefined : undefined}
+                  findActiveStart={
+                    findHit && findHit.messageId === message.id ? findHit.start : undefined
+                  }
+                />
+              </View>
             ))}
           </ScrollView>
         )}
@@ -483,7 +723,28 @@ export default function ChatScreen() {
               setSheetOpen(false);
             }}
             webSearch={webSearch}
-            onDisableWebSearch={() => setWebSearch(false)}
+            onToggleWebSearch={setWebSearch}
+            /*
+             * The catalog's label when it has arrived, and the same label derived from
+             * the id when it has not.
+             *
+             * Two sources for one string because they are ready at different times:
+             * the stored id comes back from AsyncStorage in milliseconds, the catalog
+             * is a network round trip behind it. Deriving locally in the meantime is
+             * what stops the chip reading "Model" for a second after launch and then
+             * changing under the user -- and since the server derives its label the
+             * same way, the two strings are identical, so the swap is invisible.
+             *
+             * Still null when there is no id at all: a fresh install has not been told
+             * which model it uses yet, and the chip says "Model" rather than inventing
+             * one.
+             */
+            modelLabel={
+              model ? (models.find((m) => m.id === model)?.label ?? deriveModelLabel(model)) : null
+            }
+            modelId={model}
+            modelsLoaded={modelsLoaded}
+            onPressModel={() => setModelSheetOpen(true)}
             attachments={attachments.attachments}
             onRemoveAttachment={attachments.remove}
             dictation={dictation}
@@ -500,8 +761,6 @@ export default function ChatScreen() {
           height={keyboardHeight}
           onClose={closeSheet}
           collapseMs={collapseMs}
-          webSearch={webSearch}
-          onToggleWebSearch={setWebSearch}
           onPickPhotos={attachments.pickPhotos}
           onPickFiles={attachments.pickFiles}
         />
@@ -515,11 +774,9 @@ export default function ChatScreen() {
       <TopFade />
       <View style={styles.navBarLayer} pointerEvents="box-none">
         <NavBar
-          modelBadge={MODEL_LABEL[model]}
           onPressMenu={() => setDrawerOpen(true)}
           onPressEdit={() => router.push('/new')}
-          onPressTitle={() => setModelPickerOpen(true)}
-          onPressMore={() => router.push('/settings')}
+          onPressMore={() => setMenuOpen(true)}
           /*
            * The right slot holds the temporary toggle while the chat is empty --
            * compose has nothing to start away from and the overflow menu nothing to
@@ -538,17 +795,46 @@ export default function ChatScreen() {
         />
       </View>
 
-      <ModelPicker
-        visible={modelPickerOpen}
+      <ModelSheet
+        visible={modelSheetOpen}
+        models={models}
         selected={model}
+        loaded={modelsLoaded}
         onSelect={setModel}
-        onClose={() => setModelPickerOpen(false)}
-        topOffset={insets.top + layout.chatNavBarHeight + 4}
+        onClose={() => setModelSheetOpen(false)}
+        /*
+         * The sheet's own refresh button drives this. Not fired on open: the list is
+         * read at launch and is almost always current, so re-reading it on every tap
+         * of the model chip would spend the proxy's rate limit to confirm nothing
+         * changed. Enabling a combo upstream and wanting it now is a deliberate act,
+         * so it gets a deliberate control.
+         */
+        onRefresh={refreshModels}
       />
       <HistoryDrawer
         visible={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         onOpenSettings={() => router.push('/settings')}
+      />
+
+      {/*
+       * Over the nav bar's layer, so the popover's own scrim covers the bar it hangs
+       * from -- a menu with a live hamburger beside it would let you open the drawer
+       * behind it.
+       */}
+      <ChatMenu visible={menuOpen} onClose={() => setMenuOpen(false)} items={menuItems} />
+
+      {/* Outside the KeyboardAvoidingView, like the nav bar: it is pinned under the
+          bar and the transcript is padded out from under it, not shortened by it. */}
+      <FindBar
+        visible={findOpen}
+        query={findQuery}
+        onChangeQuery={changeFindQuery}
+        index={findIndex}
+        total={findHits.length}
+        onPrev={() => step(-1)}
+        onNext={() => step(1)}
+        onClose={closeFind}
       />
     </View>
   );
@@ -570,4 +856,6 @@ const styles = StyleSheet.create({
   // The gap under it is animated (`footerStyle`); this is only the air above, which
   // separates the type box from the last turn's action row.
   footer: { paddingTop: 4 },
+  // Leaning the way a pushed pin does, matching the drawer's.
+  pinGlyph: { transform: [{ rotate: '45deg' }] },
 });

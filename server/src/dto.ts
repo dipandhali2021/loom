@@ -19,6 +19,9 @@ import { AttachmentsSchema, type Attachment } from './attachments.ts';
  *
  * `archived` has no column in the existing schema, so it is always reported as
  * false. Persisting it needs a migration, which this pass deliberately does not do.
+ * `pinned` does have one (004_conversation_pinned.sql) and is read from it: the two
+ * flags look alike, but a pin is worth a round trip in a way that hiding a finished
+ * chat is not.
  */
 
 /** Roles the app knows about (src/store/types.ts). `system` is internal-only. */
@@ -59,6 +62,7 @@ export type ConversationDTO = {
   createdAt: number;
   updatedAt: number;
   archived: boolean;
+  pinned: boolean;
 };
 
 /**
@@ -72,6 +76,7 @@ export type ConversationSummaryDTO = {
   createdAt: number;
   updatedAt: number;
   archived: boolean;
+  pinned: boolean;
   messageCount: number;
   preview: string | null;
 };
@@ -154,6 +159,7 @@ export function toConversationDTO(
     createdAt: conversation.createdAt.getTime(),
     updatedAt: conversation.updatedAt.getTime(),
     archived: false,
+    pinned: conversation.pinned,
   };
 }
 
@@ -169,6 +175,7 @@ export function toConversationSummaryDTO(
     createdAt: conversation.createdAt.getTime(),
     updatedAt: conversation.updatedAt.getTime(),
     archived: false,
+    pinned: conversation.pinned,
     messageCount: conversation._count.messages,
     preview: conversation.messages[0]?.content ?? null,
   };

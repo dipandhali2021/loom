@@ -150,6 +150,7 @@ export type ApiConversation = {
   createdAt: number;
   updatedAt: number;
   archived: boolean;
+  pinned: boolean;
 };
 
 export type ApiConversationSummary = {
@@ -158,6 +159,7 @@ export type ApiConversationSummary = {
   createdAt: number;
   updatedAt: number;
   archived: boolean;
+  pinned: boolean;
   messageCount: number;
   preview: string | null;
 };
@@ -179,8 +181,55 @@ export const createConversation = (getToken: GetToken, title?: string) =>
     body: { ...(title ? { title } : {}) },
   }).then((body) => body.conversation);
 
+/**
+ * Renames a conversation, pins it, or both.
+ *
+ * Only the named fields are written -- an omitted `title` is left as it stands, which
+ * is what lets a pin travel on its own rather than resending a title and racing a
+ * rename against it. The server requires at least one field.
+ */
+export const updateConversation = (
+  getToken: GetToken,
+  conversationId: string,
+  patch: { title?: string | null; pinned?: boolean },
+) =>
+  request<{ conversation: ApiConversation }>(
+    `/api/v1/conversations/${conversationId}`,
+    getToken,
+    { method: 'PATCH', body: patch },
+  ).then((body) => body.conversation);
+
 export const deleteConversation = (getToken: GetToken, conversationId: string) =>
   request<void>(`/api/v1/conversations/${conversationId}`, getToken, { method: 'DELETE' });
+
+// --- Models -----------------------------------------------------------------
+
+/**
+ * One model the picker can offer. Mirrors `CatalogModel` in server/src/models.ts.
+ *
+ * No capabilities: the server reads these from the proxy, and a proxy "combo"
+ * reports none -- what it can accept is decided inside the proxy, not here.
+ */
+export type ApiModel = {
+  id: string;
+  /** Derived from the id by the server; safe to render as-is. */
+  label: string;
+};
+
+/**
+ * The catalog, plus which entry to start on.
+ *
+ * `defaultModel` is null only when the catalog is empty -- nothing is configured
+ * upstream yet, which the picker says in as many words rather than showing an
+ * empty list.
+ */
+export const listModels = (getToken: GetToken, { refresh = false } = {}) =>
+  request<{ models: ApiModel[]; defaultModel: string | null }>(
+    // `refresh` skips the server's five-minute cache. Passed when the user opens the
+    // picker, which is the one moment they are looking for a model they just enabled.
+    refresh ? '/api/v1/models?refresh=1' : '/api/v1/models',
+    getToken,
+  );
 
 // --- Code execution ---------------------------------------------------------
 
@@ -355,7 +404,12 @@ export async function* streamCompletion({
   getToken: GetToken;
   conversationId: string;
   text: string;
-  model: string;
+  /**
+   * A model id from `listModels`. Null or absent leaves the choice to the server,
+   * which is what happens on the very first turn of a fresh install -- the catalog
+   * may not have arrived yet, and a turn should not wait on it.
+   */
+  model?: string | null;
   /** Photos and files for this turn, as `uploadAttachment` returned them. */
   attachments?: ApiAttachment[];
   /** Let the model search the web for this turn. The composer's switch. */
@@ -369,7 +423,7 @@ export async function* streamCompletion({
     getToken,
     body: {
       text,
-      model,
+      ...(model ? { model } : {}),
       ...(attachments && attachments.length > 0 ? { attachments } : {}),
       ...(search ? { search: true } : {}),
       ...(regenerateMessageId ? { regenerateMessageId } : {}),
@@ -398,7 +452,8 @@ export async function* streamTemporaryCompletion({
 }: {
   getToken: GetToken;
   text: string;
-  model: string;
+  /** A model id from `listModels`; see `streamCompletion`. */
+  model?: string | null;
   history: TemporaryTurn[];
   /** Photos and files for this turn, as `uploadAttachment` returned them. */
   attachments?: ApiAttachment[];
@@ -411,7 +466,7 @@ export async function* streamTemporaryCompletion({
     getToken,
     body: {
       text,
-      model,
+      ...(model ? { model } : {}),
       history,
       ...(attachments && attachments.length > 0 ? { attachments } : {}),
       ...(search ? { search: true } : {}),

@@ -53,13 +53,16 @@ const EnvSchema = z.object({
   AI_API_KEY: z.string().min(1),
 
   /*
-   * The app's model picker offers three tiers, not vendor model ids -- those
-   * differ per endpoint and would otherwise be baked into the client bundle,
-   * where changing one means shipping a new build.
+   * Which model the picker starts on, by its id on the proxy -- normally a combo
+   * such as "qwen-3.7-max-combo".
+   *
+   * Optional, and deliberately the only model named anywhere in this server. The
+   * list itself is read from the proxy at run time (models.ts), so enabling a model
+   * upstream is the whole of the work; naming a default here just spares the app
+   * from opening on whichever combo happens to be listed first. An id that is not
+   * in the catalog is warned about and ignored rather than fatal.
    */
-  AI_MODEL_FAST: z.string().min(1),
-  AI_MODEL_BALANCED: z.string().min(1),
-  AI_MODEL_SMART: z.string().min(1),
+  AI_MODEL_DEFAULT: optionalText,
 
   /*
    * --- Web search -----------------------------------------------------------
@@ -209,15 +212,6 @@ export const corsOrigins: string | string[] =
 
 export const authorizedParties = splitList(env.CLERK_AUTHORIZED_PARTIES);
 
-/** The app's `ModelId` union (src/store/types.ts) resolved to real model ids. */
-export const aiModels = {
-  'gpt-3.5': env.AI_MODEL_FAST,
-  'gpt-4': env.AI_MODEL_BALANCED,
-  'gpt-5': env.AI_MODEL_SMART,
-} as const;
-
-export type AppModelId = keyof typeof aiModels;
-
 /**
  * Whether code execution is configured at all.
  *
@@ -246,5 +240,3 @@ export const webSearchEnabled = env.WEB_SEARCH;
  * upload that fails at the last moment.
  */
 export const uploadsEnabled = Boolean(env.TRANSLOADIT_KEY && env.TRANSLOADIT_SECRET);
-
-export const appModelIds = Object.keys(aiModels) as [AppModelId, ...AppModelId[]];

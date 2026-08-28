@@ -13,6 +13,7 @@ import { CodeBlock } from './CodeBlock';
 import { Favicon, hostOf } from './Favicon';
 import { useTheme } from '../theme/ThemeProvider';
 import type { ApiSource } from '../lib/api';
+import { matchRanges } from '../lib/find';
 import { Align, Block, InlineNode, TableCell, parseMarkdown } from '../lib/markdown';
 import { type } from '../theme/tokens';
 
@@ -159,7 +160,58 @@ type Ctx = {
    * rule lives in one place and the nodes just ask.
    */
   cite: (href: string) => string | null;
+  /**
+   * The find-in-chat query to mark, and which occurrence the chevrons are on.
+   *
+   * `activeStart` is an offset into the whole message, like every other offset
+   * here, so a run only has to subtract its own start to know whether the active
+   * match is inside it.
+   */
+  find: { query: string; activeStart: number | null } | null;
 };
+
+/**
+ * Marks the query inside one run of plain text.
+ *
+ * Applied after the reveal has already decided where this run starts and ends, so
+ * a match that straddles the fade boundary is highlighted in both halves -- each
+ * half marks its own part of it, which is what keeps the two mechanisms from
+ * having to know about each other.
+ */
+function findPieces(
+  text: string,
+  start: number,
+  find: NonNullable<Ctx['find']>,
+  colors: Ctx['colors'],
+): React.ReactNode {
+  const ranges = matchRanges(text, find.query);
+  if (ranges.length === 0) return text;
+
+  const out: React.ReactNode[] = [];
+  let at = 0;
+  for (const [from, to] of ranges) {
+    if (from > at) out.push(text.slice(at, from));
+    const active = find.activeStart === start + from;
+    out.push(
+      <Text
+        key={from}
+        style={{
+          backgroundColor: active ? colors.findMatchActive : colors.findMatch,
+          ...(active ? { color: colors.findMatchOnText } : null),
+        }}
+      >
+        {text.slice(from, to)}
+      </Text>,
+    );
+    at = to;
+  }
+  if (at < text.length) out.push(text.slice(at));
+  return out;
+}
+
+/** `text`, with the query marked when there is one. */
+const marked = (text: string, start: number, ctx: Ctx): React.ReactNode =>
+  ctx.find ? findPieces(text, start, ctx.find, ctx.colors) : text;
 
 /**
  * Trailing slash and fragment dropped, so `example.com/a`, `example.com/a/` and
@@ -316,20 +368,20 @@ function textPieces(text: string, start: number, ctx: Ctx, color: string): React
     return [
       at !== null && at <= start ? (
         <FadeSpan key={`n${start}`} fade color={color}>
-          {text}
+          {marked(text, start, ctx)}
         </FadeSpan>
       ) : (
-        <Text key={`p${start}`}>{text}</Text>
+        <Text key={`p${start}`}>{marked(text, start, ctx)}</Text>
       ),
     ];
   }
 
-  if (at >= end) return [<Text key={`p${start}`}>{text}</Text>];
+  if (at >= end) return [<Text key={`p${start}`}>{marked(text, start, ctx)}</Text>];
 
   return [
-    <Text key={`p${start}`}>{text.slice(0, at - start)}</Text>,
+    <Text key={`p${start}`}>{marked(text.slice(0, at - start), start, ctx)}</Text>,
     <FadeSpan key={`n${at}`} fade color={color}>
-      {text.slice(at - start)}
+      {marked(text.slice(at - start), at, ctx)}
     </FadeSpan>,
   ];
 }
@@ -629,15 +681,25 @@ function BlockView({ block, ctx }: { block: Block; ctx: Ctx }) {
  * reached the end of the text, nothing animates and the message simply draws.
  *
  * `sources` are the turn's citations, which turn links to those pages into pills.
+ *
+ * `find` marks a search query in the prose. It deliberately does not reach inside
+ * code spans, fences or table cells' syntax: those offsets belong to the source, and
+ * a highlight drawn at one of them would sit a few characters off what was matched.
  */
 function MarkdownBase({
   text,
   revealFrom,
   sources,
+  findQuery,
+  findActiveStart,
 }: {
   text: string;
   revealFrom?: number;
   sources?: ApiSource[];
+  /** Find-in-chat query, when the bar is open and has something in it. */
+  findQuery?: string;
+  /** Offset of the match the chevrons are on, when it is in this message. */
+  findActiveStart?: number;
 }) {
   const { colors } = useTheme();
   const blocks = useMemo(() => parseMarkdown(text), [text]);
@@ -645,7 +707,8 @@ function MarkdownBase({
   const cite = useCallback((href: string) => cited.get(normalizeUrl(href)) ?? null, [cited]);
   // A boundary at or past the end means the reply is complete: nothing to fade.
   const boundary = revealFrom !== undefined && revealFrom < text.length ? revealFrom : null;
-  const ctx: Ctx = { boundary, colors, cite };
+  const find = findQuery ? { query: findQuery, activeStart: findActiveStart ?? null } : null;
+  const ctx: Ctx = { boundary, colors, cite, find };
 
   return (
     <View style={styles.root}>

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { ActivityIndicator, Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
@@ -12,11 +12,11 @@ import * as Haptics from 'expo-haptics';
 import { Icon } from './Icon';
 import { AttachmentChips } from './AttachmentChips';
 import { AppText } from './AppText';
+import { ProviderMark } from './ProviderMark';
 import type { PendingAttachment } from '../store/types';
-import { palette } from '../theme/tokens';
 import { useTheme } from '../theme/ThemeProvider';
 import { useChatStore } from '../store/ChatStore';
-import { layout, type as typeTokens } from '../theme/tokens';
+import { layout, palette, type as typeTokens } from '../theme/tokens';
 
 type Props = {
   onSubmit: (text: string) => void;
@@ -46,10 +46,27 @@ type Props = {
   inputRef?: React.RefObject<TextInput | null>;
   /** Tapping into the field. Raising the keyboard is what closes the panel. */
   onFocusField?: () => void;
-  /** Web search is armed for the next turn, per the panel's row. */
+  /** Web search is armed for the next turn. Toggled from the control row below. */
   webSearch?: boolean;
-  /** The chip's own off switch, so turning it off does not need the panel. */
-  onDisableWebSearch?: () => void;
+  /** Arms or disarms it. The control row's globe is the only switch there is now. */
+  onToggleWebSearch?: (on: boolean) => void;
+  /**
+   * The model this turn will go to, as the picker labels it.
+   *
+   * Null only when there is genuinely no model yet -- a fresh install whose catalog
+   * has not arrived. A remembered model is named immediately, from its id, so the
+   * chip does not read as a placeholder for the first second of every launch.
+   */
+  modelLabel?: string | null;
+  /** The model's id, for its provider mark. */
+  modelId?: string | null;
+  /**
+   * The catalog request has settled. Only consulted when there is no model to name:
+   * it separates "still asking" from "nothing is configured upstream".
+   */
+  modelsLoaded?: boolean;
+  /** Opens the model sheet. */
+  onPressModel?: () => void;
   /** Files picked for this turn, shown as tiles above the pill. */
   attachments?: PendingAttachment[];
   onRemoveAttachment?: (id: string) => void;
@@ -84,10 +101,18 @@ const ROTATE_MS = 240;
 const EASE_OUT = Easing.bezier(0.22, 1, 0.36, 1);
 
 /**
- * The composer from the ChatGPT Apps UI Kit: one flat pill holding "+",
- * the "Ask anything" field, a mic, and a round trailing button that cycles
- * submit -> stop -> voice depending on state. It no longer expands or collapses
- * — a single layout is what keeps the bar short.
+ * The composer: a flat pill holding "+", the "Ask anything" field, a mic, and a
+ * round trailing button that cycles submit -> stop -> voice depending on state.
+ *
+ * Two layouts, not one. At rest it is the single row above -- unchanged, and short.
+ * Focused, the text moves to the top and a control row appears beneath it carrying
+ * the same "+" and mic plus the two things that belong to the message rather than to
+ * the screen: whether it searches the web, and which model answers it.
+ *
+ * The model lives here rather than in the nav bar because it is a property of the
+ * turn being written. The cost is that it is invisible until the field is tapped,
+ * which is the right trade: a bar that names a model you are not currently sending
+ * to is decoration.
  */
 export function Composer({
   onSubmit,
@@ -102,13 +127,27 @@ export function Composer({
   inputRef,
   onFocusField,
   webSearch = false,
-  onDisableWebSearch,
+  onToggleWebSearch,
+  modelLabel,
+  modelId,
+  modelsLoaded = false,
+  onPressModel,
   attachments = [],
   onRemoveAttachment,
   dictation,
 }: Props) {
   const { colors } = useTheme();
   const { hapticsEnabled } = useChatStore();
+
+  /*
+   * Expanded because the field has focus, or because there is something to send.
+   *
+   * The second half is what stops a blur from hiding the model and the search state
+   * out from under a half-written message: dismissing the keyboard over a draft
+   * leaves the controls that describe that draft on screen. It also means the panel
+   * being open (which takes focus) does not collapse the bar.
+   */
+  const [focused, setFocused] = useState(false);
 
   const hasText = text.trim().length > 0;
   /*
@@ -120,6 +159,13 @@ export function Composer({
   const canSend = hasText || hasAttachment;
   const recording = dictation?.phase === 'recording';
   const transcribing = dictation?.phase === 'transcribing';
+
+  /*
+   * Also expanded while the attachment panel is open or a dictation is running --
+   * both are states of the message being composed, and collapsing under either would
+   * pull the controls out from beneath what the user is doing.
+   */
+  const expanded = focused || canSend || sheetOpen || recording || transcribing;
 
   /*
    * Driven off the prop rather than off local state: the panel can also be closed
@@ -147,6 +193,67 @@ export function Composer({
     setText('');
     onSubmit(value);
   };
+
+  /*
+   * The controls shared by both layouts, built once here rather than written twice.
+   *
+   * They move between rows -- "+" and the mic sit inside the pill at rest and on the
+   * control row when expanded -- and duplicating the JSX is how the two copies drift
+   * apart on the next edit.
+   */
+  const plusButton = (
+    <Pressable
+      onPress={() => {
+        tap();
+        onToggleSheet?.();
+      }}
+      hitSlop={8}
+      style={styles.glyph}
+      accessibilityRole="button"
+      accessibilityLabel={sheetOpen ? 'Close attachments' : 'Add attachment'}
+      accessibilityState={{ expanded: sheetOpen }}
+    >
+      {/* One glyph turned, not two swapped: a plus rotated onto its diagonal
+          *is* the cross, so there is nothing to cross-fade and nothing that can
+          land half a pixel off its predecessor. */}
+      <Animated.View style={crossStyle}>
+        <Feather name="plus" size={22} color={colors.labelSecondary} />
+      </Animated.View>
+    </Pressable>
+  );
+
+  const micButton = (
+    <Pressable
+      onPress={() => {
+        if (transcribing) return;
+        tap();
+        dictation?.toggle();
+      }}
+      onLongPress={() => {
+        if (!recording) return;
+        tap();
+        dictation?.cancel();
+      }}
+      hitSlop={8}
+      style={styles.glyph}
+      disabled={transcribing}
+      accessibilityRole="button"
+      accessibilityLabel={recording ? 'Stop dictation' : transcribing ? 'Transcribing' : 'Dictate'}
+      accessibilityHint={recording ? 'Press and hold to discard' : undefined}
+    >
+      {transcribing ? (
+        <ActivityIndicator size="small" color={colors.labelSecondary} />
+      ) : (
+        <Feather
+          name={recording ? 'square' : 'mic'}
+          size={recording ? 16 : 20}
+          // Red while it is live: it is the one control in the bar that is
+          // recording the room, and it should not look like the others.
+          color={recording ? palette.danger : colors.labelSecondary}
+        />
+      )}
+    </Pressable>
+  );
 
   // One button, three jobs — the kit draws all three as the same black circle.
   const action = isStreaming
@@ -196,109 +303,156 @@ export function Composer({
         </Pressable>
       ) : null}
 
-      <View style={[styles.pill, { backgroundColor: colors.composerFill }]}>
-        <Pressable
-          onPress={() => {
-            tap();
-            onToggleSheet?.();
-          }}
-          hitSlop={8}
-          style={styles.glyph}
-          accessibilityRole="button"
-          accessibilityLabel={sheetOpen ? 'Close attachments' : 'Add attachment'}
-          accessibilityState={{ expanded: sheetOpen }}
-        >
-          {/* One glyph turned, not two swapped: a plus rotated onto its diagonal
-              *is* the cross, so there is nothing to cross-fade and nothing that can
-              land half a pixel off its predecessor. */}
-          <Animated.View style={crossStyle}>
-            <Feather name="plus" size={22} color={colors.labelSecondary} />
-          </Animated.View>
-        </Pressable>
+      <View
+        style={[
+          styles.pill,
+          {
+            backgroundColor: colors.composerFill,
+            // A capsule stops reading as one at two rows tall: the curve starts
+            // eating the corners of the control row. So the radius relaxes when the
+            // bar grows, and the pill stays a true capsule while it is one line.
+            borderRadius: expanded ? layout.composerExpandedRadius : layout.composerRadius,
+          },
+          expanded ? styles.pillExpanded : null,
+        ]}
+      >
+        <View style={styles.textRow}>
+          {/* At rest the "+" sits beside the field. Expanded it moves to the row
+              below, where it lines up with the other controls. */}
+          {expanded ? null : plusButton}
 
-        {/*
-         * The armed state, said in the composer rather than only inside the panel:
-         * the panel's row is two taps away once it is closed, and a turn that will
-         * search the web should say so where the user is typing it. Tapping the
-         * glyph is also how it is turned back off.
-         */}
-        {webSearch ? (
-          <Pressable
-            onPress={() => {
-              tap();
-              onDisableWebSearch?.();
+          <TextInput
+            ref={inputRef}
+            value={text}
+            onChangeText={setText}
+            onFocus={() => {
+              setFocused(true);
+              onFocusField?.();
             }}
-            hitSlop={6}
-            style={[styles.chip, { backgroundColor: colors.fillQuaternary }]}
-            accessibilityRole="button"
-            accessibilityLabel="Web search on"
-            accessibilityHint="Turns web search off"
-          >
-            <Icon name="globe-01" size={16} color={colors.labelPrimary} />
-          </Pressable>
-        ) : null}
+            /*
+             * Collapsing is left to `expanded`, which also weighs the draft: losing
+             * focus over half a sentence keeps the row, because those controls
+             * describe the message still sitting in the field.
+             */
+            onBlur={() => setFocused(false)}
+            placeholder={placeholder}
+            placeholderTextColor={colors.labelTertiary}
+            style={[
+              typeTokens.composer,
+              styles.input,
+              expanded ? styles.inputExpanded : null,
+              { color: colors.labelPrimary },
+            ]}
+            multiline
+            returnKeyType="default"
+            accessibilityLabel={placeholder}
+          />
 
-        <TextInput
-          ref={inputRef}
-          value={text}
-          onChangeText={setText}
-          onFocus={onFocusField}
-          placeholder={placeholder}
-          placeholderTextColor={colors.labelTertiary}
-          style={[typeTokens.composer, styles.input, { color: colors.labelPrimary }]}
-          multiline
-          returnKeyType="default"
-          accessibilityLabel={placeholder}
-        />
+          {expanded ? null : micButton}
+          {expanded ? null : (
+            <Pressable
+              onPress={action.onPress}
+              hitSlop={8}
+              style={[styles.send, { backgroundColor: colors.sendButton }]}
+              accessibilityRole="button"
+              accessibilityLabel={action.label}
+            >
+              {action.glyph}
+            </Pressable>
+          )}
+        </View>
 
         {/*
-         * Dictation, not voice mode. It writes into the field above and stops there:
-         * the user reads what came back and edits it before deciding to send, which
-         * is the whole difference between the two -- and why this one lives inside
-         * the pill next to the text it produces.
+         * The control row. Everything that is a property of this message rather than
+         * of the screen: what it may attach, whether it searches, and which model
+         * answers it.
          */}
-        <Pressable
-          onPress={() => {
-            if (transcribing) return;
-            tap();
-            dictation?.toggle();
-          }}
-          onLongPress={() => {
-            if (!recording) return;
-            tap();
-            dictation?.cancel();
-          }}
-          hitSlop={8}
-          style={styles.glyph}
-          disabled={transcribing}
-          accessibilityRole="button"
-          accessibilityLabel={
-            recording ? 'Stop dictation' : transcribing ? 'Transcribing' : 'Dictate'
-          }
-          accessibilityHint={recording ? 'Press and hold to discard' : undefined}
-        >
-          {transcribing ? (
-            <ActivityIndicator size="small" color={colors.labelSecondary} />
-          ) : (
-            <Feather
-              name={recording ? 'square' : 'mic'}
-              size={recording ? 16 : 20}
-              // Red while it is live: it is the one control in the bar that is
-              // recording the room, and it should not look like the others.
-              color={recording ? palette.danger : colors.labelSecondary}
-            />
-          )}
-        </Pressable>
+        {expanded ? (
+          <View style={styles.controlRow}>
+            {plusButton}
 
-        <Pressable
-          onPress={action.onPress}
-          hitSlop={8}
-          style={[styles.send, { backgroundColor: colors.sendButton }]}
-          accessibilityRole="button"
-          accessibilityLabel={action.label}
-        >
-          {action.glyph}
-        </Pressable>
+            {/*
+             * The web-search switch itself, not an indicator of one set elsewhere.
+             * It used to be a row inside the attachment panel with a read-only chip
+             * here; two places for one switch, and the panel is two taps away from
+             * the field the question is typed in. Filled while armed.
+             */}
+            <Pressable
+              onPress={() => {
+                tap();
+                onToggleWebSearch?.(!webSearch);
+              }}
+              hitSlop={6}
+              style={[
+                styles.chip,
+                webSearch ? { backgroundColor: colors.fillPrimary } : null,
+              ]}
+              accessibilityRole="button"
+              accessibilityLabel="Web search"
+              accessibilityState={{ selected: webSearch }}
+              accessibilityHint={
+                webSearch ? 'Turns web search off' : 'Lets this turn search the web'
+              }
+            >
+              <Icon
+                name="globe-01"
+                size={18}
+                color={webSearch ? colors.labelPrimary : colors.labelSecondary}
+              />
+            </Pressable>
+
+            {/* Takes the slack, so the model chip sits against the mic and the
+                send button rather than floating in the middle. */}
+            <View style={styles.spacer} />
+
+            <Pressable
+              onPress={() => {
+                tap();
+                onPressModel?.();
+              }}
+              hitSlop={6}
+              style={({ pressed }) => [styles.model, { opacity: pressed ? 0.6 : 1 }]}
+              accessibilityRole="button"
+              accessibilityLabel={
+                modelLabel ? `Model: ${modelLabel}, change model` : 'Choose a model'
+              }
+            >
+              {/* No mark until there is a model to draw one for -- a placeholder
+                  circle beside a placeholder word would look like a failed fetch. */}
+              {modelId ? (
+                <ProviderMark modelId={modelId} label={modelLabel ?? modelId} size={18} />
+              ) : null}
+              <AppText
+                variant="footnote"
+                tone={modelLabel ? 'secondary' : 'tertiary'}
+                numberOfLines={1}
+                style={styles.modelLabel}
+              >
+                {/*
+                 * Three states, and only the first is common. A remembered model is
+                 * named from its id before the catalog arrives, so this falls through
+                 * to a placeholder only on a fresh install -- where "Loading" is the
+                 * truth until the request settles, and "Model" afterwards is the
+                 * invitation to pick from a list that turned out to be empty.
+                 */}
+                {modelLabel ?? (modelsLoaded ? 'Model' : 'Loading')}
+              </AppText>
+              <Feather name="chevron-down" size={14} color={colors.labelTertiary} />
+            </Pressable>
+
+            {micButton}
+
+            <Pressable
+              onPress={action.onPress}
+              hitSlop={8}
+              style={[styles.send, { backgroundColor: colors.sendButton }]}
+              accessibilityRole="button"
+              accessibilityLabel={action.label}
+            >
+              {action.glyph}
+            </Pressable>
+          </View>
+        ) : null}
       </View>
     </View>
   );
@@ -315,13 +469,12 @@ const styles = StyleSheet.create({
     paddingBottom: 6,
   },
   pulse: { width: 8, height: 8, borderRadius: 4 },
+  /*
+   * The pill is a column of rows now, not a row of controls: one row at rest, two
+   * when focused. The horizontal insets stay on the pill so both rows share a left
+   * and right edge; everything else about a row is the row's own business.
+   */
   pill: {
-    flexDirection: 'row',
-    // Centred, not bottom-aligned: the field's minHeight is taller than the
-    // sibling glyph boxes, so flex-end pushed the placeholder above the "+".
-    alignItems: 'center',
-    // 6pt of gap plus the glyph boxes' own inset reads as the kit's 12pt.
-    gap: 6,
     borderRadius: layout.composerRadius,
     // The glyph boxes centre their icons, so the pill's own inset is reduced by
     // that inset to keep the "+" 14pt from the pill's edge.
@@ -329,6 +482,44 @@ const styles = StyleSheet.create({
     paddingRight: 6,
     paddingVertical: layout.composerPaddingV,
   },
+  /*
+   * A little more air below once the control row exists, because that row's own
+   * glyph boxes are shorter than the field and the pill would otherwise sit tight
+   * under them.
+   */
+  pillExpanded: { paddingBottom: layout.composerPaddingV + 2 },
+  textRow: {
+    flexDirection: 'row',
+    // Centred, not bottom-aligned: the field's minHeight is taller than the
+    // sibling glyph boxes, so flex-end pushed the placeholder above the "+".
+    alignItems: 'center',
+    // 6pt of gap plus the glyph boxes' own inset reads as the kit's 12pt.
+    gap: 6,
+  },
+  controlRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  // Pushes the model chip and the two trailing controls to the right edge.
+  spacer: { flex: 1 },
+  /*
+   * The model chip: mark, full label, chevron.
+   *
+   * The label is not shortened. A user who has enabled four combos from one
+   * provider needs the part that differs, and that part is at the end -- so the
+   * chip shrinks (`flexShrink`) and truncates its own text rather than being
+   * abbreviated up front into something ambiguous.
+   */
+  model: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    flexShrink: 1,
+    paddingHorizontal: 4,
+    height: layout.sendButtonSize,
+  },
+  modelLabel: { flexShrink: 1 },
   input: {
     flex: 1,
     // A multiline field grows with its content; min/max bound it to one line and
@@ -349,6 +540,17 @@ const styles = StyleSheet.create({
       },
       default: {},
     }),
+  },
+  /*
+   * Expanded, the text starts at the top and grows downwards towards the control
+   * row, instead of staying vertically centred in a box that is now two rows tall.
+   * The centring insets above are undone for the same reason -- a first line that
+   * begins 8pt down from the pill's edge looks like a mistake next to a caret.
+   */
+  inputExpanded: {
+    textAlignVertical: 'top',
+    paddingTop: 0,
+    paddingBottom: 0,
   },
   // Fixed boxes for the bare glyphs, as tall as a one-line field, so every child
   // shares one centre line no matter how tall the field grows.

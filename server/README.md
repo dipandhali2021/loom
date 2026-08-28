@@ -23,8 +23,23 @@ Two consequences worth knowing:
 - Prisma Migrate is **not** driving this database. The `migrations` model maps the
   pre-existing ledger table and is left alone. Do not run `prisma migrate`.
 
+Schema changes since introspection are hand-written SQL in `prisma/migrations/`,
+numbered, each ending with an insert into that ledger. There is no runner: apply one
+by hand against `DIRECT_URL` (never the pooled endpoint — see `prisma.config.ts`),
+then `npm run prisma:generate`. Every file is `IF NOT EXISTS`/`ON CONFLICT DO
+NOTHING`, so running it twice is a no-op rather than an error.
+
+```bash
+psql "$DIRECT_URL" -f prisma/migrations/004_conversation_pinned.sql
+npm run prisma:generate
+```
+
 `archived` has no column, so the API always reports `archived: false`. Persisting
 it would need a schema change, which was deliberately left out of this pass.
+`pinned` looks like the same kind of flag but is not treated like one: it has a real
+column (`004_conversation_pinned.sql`) because a pin says which few chats matter and
+one that vanished on a second device would be worse than no pin at all, whereas a
+chat you archived is one you were finished with anyway.
 
 `updated_at` columns are plain `@default(now())`, **not** Prisma's `@updatedAt`, so
 every write sets `updatedAt` explicitly. Removing those looks like a cleanup and is
@@ -85,7 +100,7 @@ row is indistinguishable from a nonexistent one — 404, never 403, no existence
 | GET | `/api/v1/conversations` | Summaries only — no message bodies. |
 | POST | `/api/v1/conversations` | `{ title? }` |
 | GET | `/api/v1/conversations/:id` | Full conversation with messages. |
-| PATCH | `/api/v1/conversations/:id` | `{ title }` (nullable). |
+| PATCH | `/api/v1/conversations/:id` | `{ title?, pinned? }` — `title` nullable; at least one field. |
 | DELETE | `/api/v1/conversations/:id` | Cascades to messages. |
 | GET | `/api/v1/conversations/:id/messages` | `?limit=&after=` cursor pagination. |
 | POST | `/api/v1/conversations/:id/messages` | `{ role, text, model?, pending? }` |

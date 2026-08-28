@@ -18,10 +18,13 @@ import {
   deleteConversation as deleteRemote,
   getConversation,
   listConversations,
+  listModels,
   streamCompletion,
+  updateConversation as updateRemote,
   streamTemporaryCompletion,
   type ApiAttachment,
   type ApiConversation,
+  type ApiModel,
   type GetToken,
   type TemporaryTurn,
 } from '../lib/api';
@@ -62,7 +65,15 @@ const STORAGE_KEY = 'chatgpt-clone/state-v2';
 type PersistedState = {
   conversations: Conversation[];
   activeId: string | null;
-  model: ModelId;
+  /**
+   * The chosen model, or null before the catalog has ever been read.
+   *
+   * Nullable because the list of models lives on the server, so on a fresh install
+   * there is nothing valid to put here yet -- and a hardcoded guess would be a
+   * model id this app is not entitled to assume exists. A turn sent while it is
+   * still null lets the server pick.
+   */
+  model: ModelId | null;
   voice: VoiceName;
   hapticsEnabled: boolean;
 };
@@ -118,6 +129,28 @@ type ChatStoreValue = PersistedState & {
   stopStreaming: () => void;
   deleteConversation: (id: string) => void;
   setArchived: (id: string, archived: boolean) => void;
+  /**
+   * Pins or unpins a conversation, moving it to the top of the history list.
+   *
+   * Applied locally first and pushed to the server after, like every other write
+   * here: the row is already drawn in its new place, and a pin that had to wait on a
+   * round trip would feel like the tap missed.
+   */
+  setPinned: (id: string, pinned: boolean) => void;
+  /**
+   * Models the picker offers, as the server read them from the proxy.
+   *
+   * Empty until the catalog arrives, and empty for good if nothing is configured
+   * upstream -- which the picker says out loud rather than showing a blank list.
+   */
+  models: ApiModel[];
+  /** The catalog request has settled, either way. Distinguishes "none" from "not yet". */
+  modelsLoaded: boolean;
+  /**
+   * Re-read the catalog, past the server's cache, for the picker's refresh button.
+   * Resolves false if the read failed, so the button can say so; never rejects.
+   */
+  refreshModels: () => Promise<boolean>;
   setModel: (model: ModelId) => void;
   setVoice: (voice: VoiceName) => void;
   setHapticsEnabled: (enabled: boolean) => void;
@@ -137,7 +170,7 @@ type ChatStoreValue = PersistedState & {
 const initialState: PersistedState = {
   conversations: [],
   activeId: null,
-  model: 'gpt-5',
+  model: null,
   voice: 'Juniper',
   hapticsEnabled: true,
 };
@@ -189,6 +222,9 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
             // in again on every app open, as if it were still arriving.
             conversations: (parsed.conversations ?? []).map((c) => ({
               ...c,
+              // Written by a build before pins existed: absent means not pinned, and
+              // leaving it undefined would make `pinned` unsortable.
+              pinned: c.pinned ?? false,
               messages: c.messages
                 .filter((m) => !m.pending || m.text.length > 0)
                 .map((m) => ({ ...m, pending: false, revealFrom: undefined, tool: undefined })),
@@ -257,6 +293,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
               createdAt: s.createdAt,
               updatedAt: s.updatedAt,
               archived: false,
+              pinned: s.pinned,
             }));
           if (missing.length === 0) return prev;
 
@@ -278,6 +315,73 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   // Signing out has to re-arm the sync, or the next account gets no list at all.
   useEffect(() => {
     if (!isSignedIn) synced.current = false;
+  }, [isSignedIn]);
+
+  /*
+   * The model catalog: whatever is enabled on the proxy, filtered to combos by the
+   * server. Fetching it rather than shipping a list is the whole feature -- enabling
+   * a model upstream makes it appear here with nothing to rebuild.
+   */
+  const [models, setModels] = useState<ApiModel[]>([]);
+  const [modelsLoaded, setModelsLoaded] = useState(false);
+  const modelsFetched = useRef(false);
+
+  const loadModels = useCallback(
+    async (refresh: boolean): Promise<boolean> => {
+      try {
+        const { models: catalog, defaultModel } = await listModels(token, { refresh });
+        setModels(catalog);
+        /*
+         * Adopt the server's default when the stored choice is missing *or* no
+         * longer offered. One rule, two jobs: it seeds a fresh install, and it
+         * retires a model that was removed upstream -- including the old
+         * 'gpt-3.5' / 'gpt-4' / 'gpt-5' tiers, which is why there is no migration
+         * step anywhere for those.
+         */
+        setState((prev) => {
+          const stillOffered = prev.model !== null && catalog.some((m) => m.id === prev.model);
+          return stillOffered || defaultModel === null ? prev : { ...prev, model: defaultModel };
+        });
+        return true;
+      } catch (error) {
+        console.warn('[chat] could not load the model list', error);
+        // Re-armed, so a later sign-in retries rather than leaving the picker empty.
+        modelsFetched.current = false;
+        return false;
+      } finally {
+        setModelsLoaded(true);
+      }
+    },
+    [token],
+  );
+
+  /*
+   * Re-read the catalog, skipping the server's cache. Resolves false if it could not.
+   *
+   * Behind the picker's refresh button rather than fired on open. Opening a list is
+   * not a request to re-read it, and a forced upstream call on every tap of the model
+   * chip spends the proxy's rate limit on the overwhelmingly common case where
+   * nothing changed. A button also gives the one thing an automatic refresh cannot:
+   * somewhere to say it failed.
+   *
+   * Awaited by the caller so the button can spin for exactly as long as the work
+   * takes. It never rejects -- a false return is the whole error contract, because
+   * the list already on screen stays valid either way.
+   */
+  const refreshModels = useCallback(async () => {
+    if (!isSignedIn) return false;
+    modelsFetched.current = true;
+    return loadModels(true);
+  }, [isSignedIn, loadModels]);
+
+  useEffect(() => {
+    if (!storageHydrated || !isSignedIn || modelsFetched.current) return;
+    modelsFetched.current = true;
+    void loadModels(false);
+  }, [isSignedIn, loadModels, storageHydrated]);
+
+  useEffect(() => {
+    if (!isSignedIn) modelsFetched.current = false;
   }, [isSignedIn]);
 
   const patchConversation = useCallback((id: string, fn: (c: Conversation) => Conversation) => {
@@ -303,7 +407,15 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       ...prev,
       activeId: id,
       conversations: [
-        { id, title: 'New chat', messages: [], createdAt: now, updatedAt: now, archived: false },
+        {
+          id,
+          title: 'New chat',
+          messages: [],
+          createdAt: now,
+          updatedAt: now,
+          archived: false,
+          pinned: false,
+        },
         ...prev.conversations,
       ],
     }));
@@ -331,6 +443,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       createdAt: remote.createdAt,
       updatedAt: remote.updatedAt,
       archived: false,
+      pinned: remote.pinned,
     }),
     [],
   );
@@ -395,7 +508,8 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       /** The optimistic user row, so the server's id can be attached to it. */
       userMessageId?: string;
       prompt: string;
-      model: ModelId;
+      /** Null before the catalog has arrived; the server then picks its default. */
+      model: ModelId | null;
       /** This turn's photos and files, as the pipeline returned them. */
       attachments?: ApiAttachment[];
       /** Arms the web_search tool for this turn. */
@@ -572,7 +686,8 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       replyId: string;
       prompt: string;
       history: TemporaryTurn[];
-      model: ModelId;
+      /** Null before the catalog has arrived; see `runStream`. */
+      model: ModelId | null;
       /** This turn's photos and files, as the pipeline returned them. */
       attachments?: ApiAttachment[];
       /** Arms the web_search tool for this turn. */
@@ -812,6 +927,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
               createdAt: now,
               updatedAt: now,
               archived: false,
+              pinned: false,
             },
             ...conversations,
           ];
@@ -1085,6 +1201,25 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     [patchConversation],
   );
 
+  const setPinned = useCallback(
+    (id: string, pinned: boolean) => {
+      patchConversation(id, (c) => ({ ...c, pinned }));
+
+      /*
+       * Fire-and-forget, like the delete above. A chat with no `remoteId` was never
+       * sent to and has no row to patch; its pin rides along with the first send,
+       * because `sendMessage` creates the row from the local copy.
+       */
+      const remoteId = stateRef.current.conversations.find((c) => c.id === id)?.remoteId;
+      if (remoteId) {
+        updateRemote(token, remoteId, { pinned }).catch((error) => {
+          console.warn('[chat] could not save the pin on the server', error);
+        });
+      }
+    },
+    [patchConversation, token],
+  );
+
   const value = useMemo<ChatStoreValue>(() => {
     const active = state.conversations.find((c) => c.id === state.activeId) ?? null;
     return {
@@ -1103,7 +1238,14 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       setTemporary,
       webSearch,
       setWebSearch,
-      visibleConversations: state.conversations.filter((c) => !c.archived),
+      /*
+       * Pinned first, then in the order the list already holds (most recent first).
+       * Sorted here rather than at every call site, and stably -- two pinned chats
+       * keep their relative recency.
+       */
+      visibleConversations: state.conversations
+        .filter((c) => !c.archived)
+        .sort((a, b) => Number(b.pinned) - Number(a.pinned)),
       archivedConversations: state.conversations.filter((c) => c.archived),
       newConversation,
       openConversation,
@@ -1112,6 +1254,10 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       stopStreaming,
       deleteConversation,
       setArchived,
+      setPinned,
+      models,
+      modelsLoaded,
+      refreshModels,
       setModel: (model) => setState((prev) => ({ ...prev, model })),
       setVoice: (voice) => setState((prev) => ({ ...prev, voice })),
       setHapticsEnabled: (hapticsEnabled) => setState((prev) => ({ ...prev, hapticsEnabled })),
@@ -1145,6 +1291,9 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     deleteConversation,
     isSignedIn,
     isStreaming,
+    models,
+    modelsLoaded,
+    refreshModels,
     pendingEmail,
     pendingVerification,
     resetFlow,
@@ -1154,6 +1303,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     regenerate,
     sendMessage,
     setArchived,
+    setPinned,
     setTemporary,
     state,
     stopStreaming,

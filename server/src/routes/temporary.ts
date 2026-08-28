@@ -6,9 +6,10 @@ import { runTurn } from '../agent.ts';
 import { AttachmentsSchema, toContentParts } from '../attachments.ts';
 import { currentUser } from '../auth.ts';
 import { prisma } from '../db.ts';
-import { aiModels, appModelIds, webSearchEnabled } from '../env.ts';
+import { webSearchEnabled } from '../env.ts';
 import type { AgentProfile } from '../generated/prisma/client.ts';
 import { HttpError, parseBody } from '../http.ts';
+import { resolveModel } from '../models.ts';
 import { systemPrompt, toChatMessages } from '../prompt.ts';
 import { openStream, send } from '../sse.ts';
 
@@ -48,8 +49,8 @@ const MAX_HISTORY = 30;
 
 const TemporaryBody = z.object({
   text: z.string().trim().min(1).max(32_000),
-  /** The app's tier, not a provider model id; env.ts maps it. */
-  model: z.enum(appModelIds).default('gpt-5'),
+  /** A model id from the proxy's catalog, as on the stored route. */
+  model: z.string().min(1).optional(),
   /** Earlier turns of this temporary chat, oldest first. Nothing is stored, so
    * the client is the only thing holding them. */
   history: z
@@ -93,7 +94,8 @@ export async function postTemporaryCompletion(req: Request, res: Response): Prom
     updatedAt: new Date(),
   };
 
-  const model = aiModels[body.model];
+  // Before `openStream`, for the reason the stored route gives at length.
+  const model = await resolveModel(body.model);
 
   openStream(res);
   /*

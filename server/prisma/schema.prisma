@@ -39,12 +39,17 @@ model Conversation {
   id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   userId    String    @map("user_id") @db.Uuid
   title     String?
+  /// Pinned to the top of the chat list. A real column, unlike `archived`, which the
+  /// client keeps to itself: a pin is a deliberate statement about which few chats
+  /// matter, and one that disappeared on another device would be worse than none.
+  pinned    Boolean   @default(false)
   createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   messages  Message[]
 
   @@index([userId, updatedAt(sort: Desc)], map: "conversations_updated_at_idx")
+  @@index([userId, pinned(sort: Desc), updatedAt(sort: Desc)], map: "conversations_pinned_updated_at_idx")
   @@index([userId])
   @@map("conversations")
 }
