@@ -10,7 +10,7 @@ import { darkColors, layout, palette, type } from '../../src/theme/tokens';
 
 const VOICES: VoiceName[] = ['Breeze', 'Cove', 'Sky', 'Juniper', 'Ember'];
 
-/** Bar geometry from the design's "Animation Shape" (Figma 11:653). */
+/** Bar geometry from the design's "Animation Shape". */
 const BARS = [
   { height: 76, radius: 34 },
   { height: 79, radius: 34 },
@@ -36,7 +36,7 @@ function Bar({ height, radius, delay }: { height: number; radius: number; delay:
   return <Animated.View style={[styles.bar, { height, borderRadius: radius, transform: [{ scaleY: scale }] }]} />;
 }
 
-/** Voice Chat > Choose a voice (Figma 13:633). Always dark, like the design. */
+/** Voice Chat > Choose a voice. Always dark, like the design. */
 export default function ChooseVoiceScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();

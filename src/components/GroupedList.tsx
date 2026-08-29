@@ -5,7 +5,7 @@ import { AppText } from './AppText';
 import { useTheme } from '../theme/ThemeProvider';
 import { layout } from '../theme/tokens';
 
-/** Uppercase section header above a grouped card (Figma 24:836). */
+/** Uppercase section header above a grouped card. */
 export function SectionHeader({ children }: { children: string }) {
   return (
     <AppText variant="sectionHeader" tone="secondary" style={styles.sectionHeader}>
@@ -45,7 +45,7 @@ export function GroupedCard({ children }: { children: React.ReactNode }) {
 type RowProps = {
   icon: IconName;
   label: string;
-  /** Right-aligned secondary value, e.g. "ChatGPT Plus". */
+  /** Right-aligned secondary value, e.g. "Loom Plus". */
   value?: string;
   /** `chevron` = drill-in, `updown` = inline picker, `none` = plain row. */
   accessory?: 'chevron' | 'updown' | 'none';

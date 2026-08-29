@@ -87,8 +87,7 @@ const PANEL_CLOSE_MS = 200;
 const COVERED_GAP = 4;
 
 /**
- * The chat screen, following the ChatGPT Apps UI Kit (rR8Yz5BLDtLM1EKCPalwY3,
- * 4420:1535). Main view / typing / getting-answer / scrolling are all this one
+ * The chat screen. Main view / typing / getting-answer / scrolling are all this one
  * screen, differing only by whether a transcript exists and whether a reply is
  * streaming.
  */

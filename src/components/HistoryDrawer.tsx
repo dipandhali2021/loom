@@ -274,7 +274,7 @@ export function HistoryDrawer({ visible, onClose, onOpenSettings }: Props) {
             ]}
           >
             <View style={styles.header}>
-              <AppText variant="largeTitle">Mirai</AppText>
+              <AppText variant="largeTitle">Loom</AppText>
             </View>
 
             {/* The fade is a sibling of the scroll view, not a child: inside it, it

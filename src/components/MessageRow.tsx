@@ -70,10 +70,10 @@ function toolLabel(tool: ToolActivity): string {
 }
 
 /**
- * One turn in the transcript, in the ChatGPT Apps UI Kit's shape: the user's
+ * One turn in the transcript: the user's
  * message is a right-aligned white capsule with dark text, the assistant's is
  * plain body text running the full width with an action row beneath it. Neither
- * side carries an avatar or a "You" / "ChatGPT" label any more — dropping them is
+ * side carries an avatar or a "You" / "Loom" label any more — dropping them is
  * most of what removes the old layout's whitespace.
  *
  * `findQuery` marks a find-in-chat search inside the turn, and `findActiveStart` is

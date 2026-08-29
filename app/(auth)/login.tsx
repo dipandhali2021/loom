@@ -23,6 +23,7 @@ import { AppText } from '../../src/components/AppText';
 import { HeroVideo } from '../../src/hero/HeroVideo';
 import { PHRASES } from '../../src/hero/phrases';
 import { useEmailOtpAuth } from '../../src/auth/useEmailOtpAuth';
+import { useGoogleAuth } from '../../src/auth/useGoogleAuth';
 import { darkColors, layout, palette, type } from '../../src/theme/tokens';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
@@ -125,6 +126,7 @@ export default function LoginScreen() {
   const insets = useSafeAreaInsets();
   const { pendingVerification, pendingEmail, busy, error, requestCode, resendCode, submitCode, resetFlow } =
     useEmailOtpAuth();
+  const google = useGoogleAuth();
 
   const [emailOpen, setEmailOpen] = useState(false);
   const [email, setEmail] = useState('');
@@ -259,7 +261,14 @@ export default function LoginScreen() {
           ]}
         >
           {step === 'choices' ? (
-            <Choices key="choices" sheet={sheet} onEmail={() => setEmailOpen(true)} />
+            <Choices
+              key="choices"
+              sheet={sheet}
+              onEmail={() => setEmailOpen(true)}
+              onGoogle={() => void google.signInWithGoogle()}
+              googleAvailable={google.available}
+              googleBusy={google.busy}
+            />
           ) : step === 'email' ? (
             <EmailStep
               key="email"
@@ -298,10 +307,15 @@ export default function LoginScreen() {
             />
           )}
 
-          {error ? (
+          {/*
+           * One error line for both flows. They cannot fail at the same time --
+           * the Google button only exists on the step that has no email request
+           * in flight -- so whichever is set is the current one.
+           */}
+          {error ?? google.error ? (
             <Animated.View entering={FadeIn.duration(180)}>
               <AppText tone="none" style={[type.footnote, styles.error, { color: palette.danger }]}>
-                {error}
+                {error ?? google.error}
               </AppText>
             </Animated.View>
           ) : null}
@@ -311,19 +325,32 @@ export default function LoginScreen() {
   );
 }
 
-/** The first step: how to sign in. Apple/Google are per-platform and still inert. */
-function Choices({ sheet, onEmail }: { sheet: typeof darkColors; onEmail: () => void }) {
+/** The first step: how to sign in. Google is live; Apple is iOS-only and still inert. */
+function Choices({
+  sheet,
+  onEmail,
+  onGoogle,
+  googleAvailable,
+  googleBusy,
+}: {
+  sheet: typeof darkColors;
+  onEmail: () => void;
+  onGoogle: () => void;
+  googleAvailable: boolean;
+  googleBusy: boolean;
+}) {
   return (
     <Animated.View entering={FadeIn.duration(240)} style={styles.stack}>
       {/*
-       * Email is the only strategy enabled on the Clerk instance right now. The
-       * social buttons stay in place because the design's sheet is built around
-       * them, but they are inert until an OAuth provider is configured -- pressing
-       * them cannot sign anyone in, so they read as unavailable rather than
-       * silently failing.
-       *
        * Apple only on iOS: it is the platform's own account, and offering it on
-       * Android would promise something the device cannot do.
+       * Android would promise something the device cannot do. Still inert -- it
+       * needs its own credentials and an Apple Developer account, neither of which
+       * is set up -- so it reads as unavailable rather than failing on press.
+       *
+       * Note for whoever wires it: App Store guideline 4.8 requires Sign in with
+       * Apple on any iOS app that offers another third-party social sign-in, and
+       * Google below is now one. So this is a blocker for an App Store submission,
+       * though not for Android.
        */}
       {Platform.OS === 'ios' ? (
         <AuthButton
@@ -335,14 +362,25 @@ function Choices({ sheet, onEmail }: { sheet: typeof darkColors; onEmail: () => 
           onPress={() => {}}
         />
       ) : null}
-      <AuthButton
-        label="Continue with Google"
-        icon={<Icon name="google" size={16} />}
-        background={sheet.fillPrimary}
-        textColor={palette.white}
-        disabled
-        onPress={() => {}}
-      />
+      {/*
+       * Google goes through the OS account picker, so it needs a native build and
+       * the client IDs -- `googleAvailable` is false without either, and the row
+       * then reads as unavailable rather than throwing from the missing native
+       * module. It is hidden rather than disabled where it cannot work at all
+       * (web), because a permanently dead row is worse than no row.
+       */}
+      {googleAvailable || Platform.OS !== 'web' ? (
+        <AuthButton
+          label="Continue with Google"
+          icon={<Icon name="google" size={16} />}
+          background={sheet.fillPrimary}
+          textColor={palette.white}
+          disabled={!googleAvailable || googleBusy}
+          busy={googleBusy}
+          spinnerColor={palette.white}
+          onPress={onGoogle}
+        />
+      ) : null}
       {/*
        * One email row, not two: the code request tries a sign-in and falls back
        * to a sign-up, so the address itself decides which happens and asking up
@@ -533,6 +571,8 @@ function AuthButton({
   background,
   textColor,
   disabled,
+  busy,
+  spinnerColor,
   onPress,
 }: {
   label: string;
@@ -540,6 +580,8 @@ function AuthButton({
   background: string;
   textColor: string;
   disabled?: boolean;
+  busy?: boolean;
+  spinnerColor?: string;
   onPress: () => void;
 }) {
   return (
@@ -548,17 +590,28 @@ function AuthButton({
       disabled={disabled}
       style={({ pressed }) => [
         styles.button,
-        { backgroundColor: background, opacity: disabled ? 0.35 : pressed ? 0.8 : 1 },
+        /*
+         * A busy button keeps its full opacity while it is disabled: the flow it
+         * started is a system sheet over this screen, and dimming the row it came
+         * from would read as the press having failed. Only an unavailable row dims.
+         */
+        { backgroundColor: background, opacity: disabled && !busy ? 0.35 : pressed ? 0.8 : 1 },
       ]}
       accessibilityRole="button"
       accessibilityLabel={label}
-      accessibilityState={{ disabled: !!disabled }}
-      accessibilityHint={disabled ? 'Not available yet. Use email instead.' : undefined}
+      accessibilityState={{ disabled: !!disabled, busy: !!busy }}
+      accessibilityHint={disabled && !busy ? 'Not available yet. Use email instead.' : undefined}
     >
-      {icon}
-      <AppText tone="none" style={[type.authButton, { color: textColor }]}>
-        {label}
-      </AppText>
+      {busy ? (
+        <ActivityIndicator color={spinnerColor ?? textColor} />
+      ) : (
+        <>
+          {icon}
+          <AppText tone="none" style={[type.authButton, { color: textColor }]}>
+            {label}
+          </AppText>
+        </>
+      )}
     </Pressable>
   );
 }

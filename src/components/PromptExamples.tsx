@@ -6,7 +6,7 @@ import { layout } from '../theme/tokens';
 
 export type PromptExample = { title: string; subtitle: string };
 
-/** The two starter prompts shown above the composer on an empty chat (Figma 1:357). */
+/** The two starter prompts shown above the composer on an empty chat. */
 export const DEFAULT_PROMPTS: PromptExample[] = [
   { title: 'Design a database schema', subtitle: 'for an online merch store' },
   { title: 'Explain airplain', subtitle: 'to someone 5 years old' },

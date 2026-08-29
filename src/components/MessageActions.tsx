@@ -30,7 +30,7 @@ type Props = {
  * The action row under a finished assistant reply: copy, read aloud, the two
  * votes, regenerate, share.
  *
- * Glyphs come from the committed Figma exports where the kit's icon exists in
+ * Glyphs come from the committed icon exports where the design kit's icon exists in
  * `assets/icons/` (speaker, regenerate); the rest use Feather from
  * `@expo/vector-icons`, whose outlines match the kit's 1.6pt stroke. Nothing here
  * is hand-drawn.

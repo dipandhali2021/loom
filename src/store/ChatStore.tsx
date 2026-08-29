@@ -54,13 +54,20 @@ function describeAttachments(attachments: ApiAttachment[]): string {
     : `Have a look at these files: ${names}.`;
 }
 
-/*
- * Bumped from v1: `signedIn` / `email` used to be persisted here.
- * Clerk owns the session now, and the hydrate below spreads whatever it reads over
- * the defaults -- so a v1 payload would reinstate a stale "signed in" that no Clerk
- * session backs. A new key retires those records instead of migrating them.
+const STORAGE_KEY = 'loom/state-v1';
+
+/**
+ * Where this lived before the app was named. Read once, when the current key is
+ * empty, so an install that predates the rename keeps its chats rather than opening
+ * to an empty list; the payload shape is unchanged, so it needs no translation.
+ *
+ * The `-v2` suffix is deliberate. An earlier `-v1` key also persisted `signedIn`
+ * and `email`, which Clerk owns now, and the hydrate below spreads whatever it
+ * reads over the defaults -- so reading that one would reinstate a signed-in flag
+ * no session backs. It was retired by moving key rather than by migrating, and
+ * naming only `-v2` here keeps it retired.
  */
-const STORAGE_KEY = 'chatgpt-clone/state-v2';
+const LEGACY_STORAGE_KEY = 'chatgpt-clone/state-v2';
 
 type PersistedState = {
   conversations: Conversation[];
@@ -214,6 +221,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     AsyncStorage.getItem(STORAGE_KEY)
+      .then((raw) => (raw === null ? AsyncStorage.getItem(LEGACY_STORAGE_KEY) : raw))
       .then((raw) => {
         if (raw) {
           const parsed = JSON.parse(raw) as Partial<PersistedState>;

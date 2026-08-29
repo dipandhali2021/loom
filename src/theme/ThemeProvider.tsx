@@ -15,7 +15,14 @@ type ThemeValue = {
   setPreference: (next: ColorSchemePreference) => void;
 };
 
-const STORAGE_KEY = 'chatgpt-clone/color-scheme';
+const STORAGE_KEY = 'loom/color-scheme';
+
+/**
+ * The key this used to be stored under. Read once, when the current key holds
+ * nothing, so an install that predates the rename keeps the scheme its owner
+ * chose rather than snapping back to System on first launch.
+ */
+const LEGACY_STORAGE_KEY = 'chatgpt-clone/color-scheme';
 
 const ThemeContext = createContext<ThemeValue | null>(null);
 
@@ -26,9 +33,13 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     AsyncStorage.getItem(STORAGE_KEY)
+      .then((stored) => (stored === null ? AsyncStorage.getItem(LEGACY_STORAGE_KEY) : stored))
       .then((stored) => {
         if (stored === 'light' || stored === 'dark' || stored === 'system') {
           setPreferenceState(stored);
+          // Written forward on read rather than left to the next toggle, so the
+          // legacy key stops being consulted after one launch.
+          AsyncStorage.setItem(STORAGE_KEY, stored).catch(() => {});
         }
       })
       .catch(() => {

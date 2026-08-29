@@ -13,7 +13,7 @@ import { layout } from '../src/theme/tokens';
 const SCHEME_LABEL = { system: 'System', light: 'Light', dark: 'Dark' } as const;
 const SCHEME_ORDER = ['system', 'light', 'dark'] as const;
 
-/** Settings (Figma 24:703): a modal sheet of grouped rows over the secondary background. */
+/** Settings: a modal sheet of grouped rows over the secondary background. */
 export default function SettingsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -51,7 +51,7 @@ export default function SettingsScreen() {
         <SectionHeader>Account</SectionHeader>
         <GroupedCard>
           <Row icon="mail-01" label="Email" value={email ?? '—'} />
-          <Row icon="plus-square" label="Subscription" value="ChatGPT Plus" />
+          <Row icon="plus-square" label="Subscription" value="Loom Plus" />
           <Row icon="refresh-cw" label="Restore purchases" onPress={() => {}} />
           <Row icon="database-01" label="Data Controls" accessory="chevron" onPress={() => {}} />
           <Row
@@ -97,9 +97,10 @@ export default function SettingsScreen() {
         <SectionHeader>About</SectionHeader>
         <GroupedCard>
           <Row icon="help-circle" label="Help Center" accessory="chevron" onPress={() => router.push('/support')} />
-          <Row icon="file-02" label="Terms of Use" accessory="chevron" onPress={() => router.push('/about')} />
-          <Row icon="lock-01" label="Privacy Policy" accessory="chevron" onPress={() => router.push('/about')} />
-          <Row icon="database-01" label="ChatGPT for iOS" value={version} last />
+          <Row icon="file-02" label="Terms of Use" accessory="chevron" onPress={() => router.push('/terms')} />
+          <Row icon="lock-01" label="Privacy Policy" accessory="chevron" onPress={() => router.push('/privacy')} />
+          <Row icon="logo-dot" label="About Loom" accessory="chevron" onPress={() => router.push('/about')} />
+          <Row icon="database-01" label="Version" value={version} last />
         </GroupedCard>
 
         <View style={styles.logoutWrap}>

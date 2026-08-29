@@ -17,7 +17,7 @@ import { recipeFor } from './languages.ts';
 /** Mount point for the per-user volume, and the parent of every run directory. */
 const WORKSPACE = '/workspace';
 /** Where a run goes when it has no volume: ephemeral, gone with the VM. */
-const SCRATCH = '/tmp/mirai';
+const SCRATCH = '/tmp/loom';
 
 /**
  * Ceiling on each stream, in characters.
@@ -36,7 +36,7 @@ const MAX_OUTPUT = 20_000;
  * putting it on the persistent volume would spend the user's 400MB on it and leave
  * the previous run's output sitting there for the next one to read.
  */
-const IO = '/tmp/mirai-io';
+const IO = '/tmp/loom-io';
 
 /**
  * Bytes of each stream kept in the VM, before it is read back and clipped.
@@ -169,7 +169,7 @@ const slots = new Slots(env.SANDBOX_CONCURRENCY);
 const volumeInUse = new Set<string>();
 
 /** Prefix on every workspace volume, so one is recognisable in the Deploy dashboard. */
-const SLUG_PREFIX = 'mirai-ws-';
+const SLUG_PREFIX = 'loom-ws-';
 
 /**
  * The most hex a slug has room for after the prefix.
@@ -187,8 +187,8 @@ const SLUG_HEX = 32 - SLUG_PREFIX.length;
  *
  * The platform's rules are narrow -- 2-32 characters of `[a-z0-9-]`, no leading,
  * trailing or doubled hyphen -- and a UUID with its dashes in is both too long and
- * the wrong shape, so the hex is taken bare. Twenty-three hex characters is 92 bits,
- * far more than enough to keep two users apart.
+ * the wrong shape, so the hex is taken bare. The hex that fits is 96 bits' worth, far
+ * more than enough to keep two users apart.
  */
 export function volumeSlugFor(userId: string): string {
   const hex = userId
@@ -303,7 +303,7 @@ async function boot(root: string | undefined, volume: string | null): Promise<Sa
      * have none at all.
      */
     allowNet: [],
-    labels: { app: 'mirai', purpose: 'run' },
+    labels: { app: 'loom', purpose: 'run' },
   });
 
   let timer: ReturnType<typeof setTimeout> | undefined;

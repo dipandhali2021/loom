@@ -1,4 +1,4 @@
-// AUTO-GENERATED from the Figma export in assets/icons — do not edit by hand.
+// AUTO-GENERATED from the SVGs in assets/icons — do not edit by hand.
 // Regenerate with: node scripts/gen-icons.mjs
 
 export const ICONS = {

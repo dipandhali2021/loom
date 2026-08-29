@@ -25,7 +25,7 @@ model User {
 model AgentProfile {
   id                 String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   userId             String         @unique @map("user_id") @db.Uuid
-  displayName        String         @default("Mirai") @map("display_name")
+  displayName        String         @default("Loom") @map("display_name")
   tone               AgentTone      @default(neutral)
   verbosity          AgentVerbosity @default(balanced)
   customInstructions String         @default("") @map("custom_instructions")

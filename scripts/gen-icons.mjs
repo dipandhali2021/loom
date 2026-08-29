@@ -22,10 +22,10 @@ for (const file of fs.readdirSync(DIR).sort()) {
   xml = xml.replace(/\s*overflow="visible"/g, '');
   xml = xml.replace(/\s*style="display: block;"/g, '');
   if (MONO.has(name)) {
-    // Figma emits a duplicate inline `style` that pins the literal color; strip it,
+    // The design tool emits a duplicate inline `style` that pins the literal color; strip it,
     // then hand the ink over to `currentColor` so the Icon component controls it.
     xml = xml.replace(/\s*style="[^"]*(?:stroke|fill)\s*:[^"]*"/g, '');
-    // Every literal ink, not just black and white: Figma exports a glyph in whatever
+    // Every literal ink, not just black and white: the export carries a glyph in whatever
     // color the frame happened to use (`edit` came out #3C3C3C at 0.3), and leaving
     // that in place is what makes an icon invisible on a background it was not drawn
     // against. `none` is structural -- an unfilled stroke path -- so it stays.
@@ -41,7 +41,7 @@ for (const file of fs.readdirSync(DIR).sort()) {
 const body = out.map(([n, x]) => `  ${JSON.stringify(n)}: ${JSON.stringify(x)},`).join('\n');
 fs.writeFileSync(
   'src/assets/icons.ts',
-  `// AUTO-GENERATED from the Figma export in assets/icons — do not edit by hand.\n` +
+  `// AUTO-GENERATED from the SVGs in assets/icons — do not edit by hand.\n` +
   `// Regenerate with: node scripts/gen-icons.mjs\n\n` +
   `export const ICONS = {\n${body}\n} as const;\n\n` +
   `export type IconName = keyof typeof ICONS;\n`

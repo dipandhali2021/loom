@@ -10,7 +10,7 @@ import { palette, type } from '../../src/theme/tokens';
 /** Design frame height; the absolute coordinates below are relative to it. */
 const FRAME_HEIGHT = 852;
 
-/** Voice Chat > Talking (Figma 13:631). */
+/** Voice Chat > Talking. */
 export default function TalkingScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();

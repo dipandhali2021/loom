@@ -23,11 +23,11 @@ import type { Memory } from '@deno/sandbox';
 import { env, sandboxEnabled } from '../src/env.ts';
 
 /** Scratch volume, deleted at the end. Its only job is to be snapshotted. */
-const VOLUME_SLUG = 'mirai-toolchain-build';
+const VOLUME_SLUG = 'loom-toolchain-build';
 /** Labels on every sandbox this script boots, so a leftover can be found again. */
-const PROVISION_LABELS = { app: 'mirai', purpose: 'provision' } as const;
+const PROVISION_LABELS = { app: 'loom', purpose: 'provision' } as const;
 /** Default slug for the result; SANDBOX_SNAPSHOT overrides it. */
-const SNAPSHOT_SLUG = env.SANDBOX_SNAPSHOT ?? 'mirai-toolchains';
+const SNAPSHOT_SLUG = env.SANDBOX_SNAPSHOT ?? 'loom-toolchains';
 
 /**
  * Room for the toolchains plus apt's own caches mid-install.

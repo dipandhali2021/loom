@@ -1,87 +1,49 @@
 import React from 'react';
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
-import { useRouter } from 'expo-router';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Icon } from '../src/components/Icon';
-import { AppText } from '../src/components/AppText';
-import { useTheme } from '../src/theme/ThemeProvider';
-import { layout, type } from '../src/theme/tokens';
+import Constants from 'expo-constants';
+import { Bullets, DocScreen, Prose, Section } from '../src/components/DocScreen';
 
-const CAN_DO = [
-  'Get Inspired: Use for your own projects.',
-  'Save Time: Use as a starting point.',
-  'Customize: Modify for your needs.',
-];
-
-const CANNOT_DO = ['Commercial Use: For personal and educational use only.', 'Resell: Do not resell or redistribute.'];
-
-/** About (Figma 26:652). */
+/** About, reached from Settings. */
 export default function AboutScreen() {
-  const router = useRouter();
-  const insets = useSafeAreaInsets();
-  const { colors } = useTheme();
+  const version = Constants.expoConfig?.version ?? '1.0.0';
 
   return (
-    <View style={[styles.screen, { backgroundColor: colors.bgPrimary, paddingTop: insets.top }]}>
-      <View style={styles.navBar}>
-        <Pressable onPress={() => router.back()} hitSlop={12} accessibilityRole="button" accessibilityLabel="Back">
-          <Icon name="chevron-left" size={24} color={colors.labelPrimary} />
-        </Pressable>
-        <AppText variant="bodySemibold">About</AppText>
-        <View style={styles.spacer} />
-      </View>
+    <DocScreen title="About" subtitle={`Version ${version}`}>
+      <Section title="Loom">
+        <Prose>
+          Loom is a chat app for talking to AI models. A conversation is a thread: you write, a reply
+          streams back, and the thread is kept so you can pick it up later. The name is the rest of the
+          idea — many threads, one cloth.
+        </Prose>
+      </Section>
 
-      <ScrollView
-        contentContainerStyle={[styles.content, { paddingBottom: Math.max(insets.bottom, 20) + 24 }]}
-        showsVerticalScrollIndicator={false}
-      >
-        <AppText tone="primary" style={type.message}>
-          Recreated the ChatGPT iOS app UI in Figma to help you learn and get inspired.
-        </AppText>
+      <Section title="What it does">
+        <Bullets
+          items={[
+            'Streaming replies, with the reply’s own stop button while it arrives.',
+            'Any model the server offers, chosen per message in the composer.',
+            'Web search on demand, with the pages a reply read listed under it.',
+            'Photos and documents as attachments.',
+            'Code blocks you can run in a disposable sandbox.',
+            'Dictation from the composer’s mic.',
+            'Temporary chats that are never stored.',
+            'Light, dark and system appearance.',
+          ]}
+        />
+      </Section>
 
-        <ListBlock title="What you can do:" items={CAN_DO} />
-        <ListBlock title="What you can’t do:" items={CANNOT_DO} />
-      </ScrollView>
-    </View>
+      <Section title="Built with">
+        <Prose>
+          React Native and Expo on the client, with an Express and Postgres server in front of the model
+          provider. The server exists so that no API key is ever in the app.
+        </Prose>
+      </Section>
+
+      <Section title="Replies are generated">
+        <Prose>
+          Model output can be wrong, and is not professional advice. Check anything you plan to act on.
+          The Help Center lists what is finished and what is not.
+        </Prose>
+      </Section>
+    </DocScreen>
   );
 }
-
-function ListBlock({ title, items }: { title: string; items: string[] }) {
-  return (
-    <View style={styles.block}>
-      <AppText tone="primary" style={type.title3Bold}>
-        {title}
-      </AppText>
-      <View>
-        {items.map((item) => (
-          <View key={item} style={styles.bulletRow}>
-            <AppText tone="primary" style={[type.message, styles.bullet]}>
-              •
-            </AppText>
-            <AppText tone="primary" style={[type.message, styles.bulletText]}>
-              {item}
-            </AppText>
-          </View>
-        ))}
-      </View>
-    </View>
-  );
-}
-
-const styles = StyleSheet.create({
-  screen: { flex: 1 },
-  navBar: {
-    height: layout.navBarHeight,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-  },
-  spacer: { width: 24 },
-  content: { paddingHorizontal: 16, paddingTop: 24, gap: 32 },
-  block: { gap: 8 },
-  // Design indents list items 25.5pt from the text column.
-  bulletRow: { flexDirection: 'row' },
-  bullet: { width: 25.5, textAlign: 'center' },
-  bulletText: { flex: 1 },
-});

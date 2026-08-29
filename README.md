@@ -1,13 +1,14 @@
-# ChatGPT iOS App UI — React Native / Expo Go
+# Loom
 
-A pixel-accurate React Native implementation of the [ChatGPT iOS App UI Figma
-template](https://www.figma.com/design/qdILME75coHzgHr2H5ugIp/ChatGPT-iOS-App-UI---Free-Figma-Template--Community-)
-by Iosi Pratama. Every frame in the file is reproduced at its design metrics
-(393 × 852), and the screens are wired together into a working app — chats
-stream, state persists, the theme switches — rather than static mockups.
+A chat app for talking to AI models, built with React Native and Expo. A
+conversation is a thread: you write, a reply streams back, and the thread is kept
+so you can pick it up later.
 
-Runs in **Expo Go**: no custom native modules, no prebuild, no Xcode/Android
-Studio required.
+Two halves, both in this repo:
+
+- the Expo app (`app/`, `src/`)
+- an Express + Prisma + Postgres API (`server/`), which exists so that no model
+  API key is ever in the client bundle
 
 ---
 
@@ -17,10 +18,11 @@ Studio required.
 | --- | --- |
 | Node.js | 22.13+ (Expo SDK 57 minimum) |
 | npm | 10+ (ships with Node 22) |
-| Expo Go | the **SDK 57** build — see below, the store build may be older |
+| Postgres | any 14+; the project was built against Neon |
 
-A phone and a computer on the same Wi-Fi network. No Xcode or Android Studio
-needed — those are only required if you later run a native build.
+A Clerk application for authentication, and an OpenAI-compatible endpoint for the
+models. Web search, attachments, dictation and code execution are each optional
+and off until configured.
 
 Check your Node version first, since SDK 57 will not start on older runtimes:
 
@@ -28,272 +30,256 @@ Check your Node version first, since SDK 57 will not start on older runtimes:
 node --version
 ```
 
+### This project needs a dev client, not Expo Go
+
+`expo-video` ships a config plugin, so the login screen's video hero cannot run in
+Expo Go. Build a development client once and use that instead:
+
+```bash
+npx expo run:android      # or: npx expo run:ios
+```
+
+That needs Android Studio or Xcode installed. Alternatively build it in the cloud
+with `eas build --profile development`. After the first build, `npx expo start`
+and the dev client behave exactly like Expo Go did.
+
 ## 2. Install
 
 ```bash
-cd mirai-v2
 npm install --legacy-peer-deps
+cd server && npm install && cd ..
 ```
 
-`--legacy-peer-deps` is required. `react-dom@19.2.8` (pulled in transitively by
-the Expo toolchain) declares a peer range that npm's strict resolver rejects
-against `react@19.2.3`; the flag lets the install proceed. It does not affect
-the runtime bundle.
+`--legacy-peer-deps` is required for the app. `react-dom@19.2.8` (pulled in
+transitively by the Expo toolchain) declares a peer range that npm's strict
+resolver rejects against `react@19.2.3`; the flag lets the install proceed. It
+does not affect the runtime bundle.
 
-## 3. Run
+## 3. Configure
+
+Two env files, one per half. Both have a committed `.example`.
 
 ```bash
-npx expo start
+cp .env.example .env
+cp server/.env.example server/.env
 ```
 
-Metro prints a QR code. Then:
+The app needs two values to run at all: the Clerk publishable key (public by
+design, inlined into the bundle) and the URL of the API. The four Google
+client-ID variables below them are optional — without them the Google sign-in row
+is disabled and email still works. A physical device cannot reach
+`localhost` — that resolves to the phone itself — so use your machine's LAN
+address, `10.0.2.2` on an Android emulator, or `localhost` on the iOS simulator.
 
-- **iOS** — open Camera, scan the QR code, tap the banner to open Expo Go.
-- **Android** — open Expo Go, tap *Scan QR code*, scan it.
+The server needs the database URL, the Clerk secret key, and the model endpoint's
+base URL and key. Everything else in `server/.env.example` is optional and
+documented inline.
 
-### Get the SDK 57 build of Expo Go first
+Env changes are baked in at bundle time, so restart with `npx expo start --clear`
+after editing `.env`.
 
-Each Expo Go build embeds exactly **one** SDK version, and it has to match the
-`expo` version in `package.json` (SDK 57 here). The App Store build stops at SDK
-54 and the Play Store build often lags a new release, so the store copy is
-usually *not* the one you need. If Expo Go says *"Project is incompatible with
-this version of Expo Go"*, that's why.
-
-- **Android phone / emulator, iOS Simulator** — open <https://expo.dev/go>,
-  pick **SDK 57** and your platform, and install that build. Or from the CLI:
-
-  ```bash
-  npx expo-go download android 57.0.0
-  ```
-
-  On a phone, sideloading the APK needs *Install unknown apps* enabled for your
-  browser or file manager. Installing it replaces the store copy.
-
-- **Physical iPhone / iPad** — the App Store has no SDK 55+ build. Use
-  <https://sign.expo.dev>, pick SDK 57, and follow the steps; it signs with your
-  Apple ID's free provisioning, valid ~7 days, then re-sign there again.
-
-After installing, restart the dev server (`npx expo start`) and scan again.
-
-If the phone can't reach your machine (VPN, corporate Wi-Fi, client isolation),
-use a tunnel:
+## 4. Run
 
 ```bash
-npx expo start --tunnel
+cd server && npm run dev     # API on :3000
+npx expo start               # Metro, in another terminal
 ```
 
-Useful keys once Metro is running: `r` reload, `j` open debugger, `m` toggle the
-dev menu, `shift+m` more tools.
+Metro prints a QR code; open it in the dev client. Useful keys once it is running:
+`r` reload, `j` open debugger, `m` toggle the dev menu, `shift+m` more tools.
 
-## 4. What you'll see
+If the phone cannot reach your machine (VPN, corporate Wi-Fi, client isolation),
+use a tunnel: `npx expo start --tunnel`.
 
-The app boots to the animated **Launch Screen** while it reads persisted state,
-then lands on **Login**. Any of the four auth buttons signs you in:
+## 5. What you'll see
 
-- *Continue with Apple* / *Continue with Google* — sign in immediately.
-- *Sign up with email* — enter an address, which routes to **Verify your email**;
-  tap *I've verified my email* to continue.
-- *Log in* — signs in directly.
+The app boots to the animated launch screen while it reads persisted state, then
+lands on **Login** — a video hero behind a sheet that morphs in place:
 
-From the chat screen: tap a prompt chip or type a message to get a streamed
-reply, the title to switch models, the ☰ icon for chat history, the headphones
-icon for the voice flow, and Settings via the history drawer's footer row.
+    choices -> email -> code -> signed in
 
-## 5. Screen map
+Enter an email address and a six-digit code arrives; whether the account already
+exists decides whether that is a sign-in or a sign-up, so there is nothing to
+choose first. Continue with Google goes through the OS account picker instead, and
+needs credentials — see [`docs/GOOGLE_SIGN_IN.md`](docs/GOOGLE_SIGN_IN.md); the row
+disables itself where they are absent. The Apple row is still a placeholder.
 
-Every Figma frame, and where it lives:
-
-| Figma section / frame | Route or component |
-| --- | --- |
-| Onboarding › Launch Screen (36:668) | `src/components/LaunchScreen.tsx` |
-| Onboarding › Login 1–4 (13:1130, 13:1180, 1:163, 1:189) | `app/(auth)/login.tsx` — one screen, cross-fading variants |
-| Onboarding › Email Verification (36:670) | `app/(auth)/verify-email.tsx` |
-| — (bridges Login → Verification) | `app/(auth)/signup.tsx` |
-| MainView › Main View (13:801) | `app/(app)/index.tsx` — empty state |
-| MainView › Getting answer (13:803) | same screen, streaming |
-| MainView › Scrolling (1:441) | same screen, transcript + blurred nav bar |
-| Settings › Selecting GPT (24:645) | `src/components/ModelPicker.tsx` |
-| Settings › Settings (24:703) | `app/settings.tsx` |
-| Settings › Archived Chats (row target) | `app/archived.tsx` |
-| Voice Chat › Welcome (11:603) | `app/voice/index.tsx` |
-| Voice Chat › Choose a voice (13:633) | `app/voice/choose.tsx` |
-| Voice Chat › Talking (13:631) | `app/voice/talking.tsx` |
-| Support › Support (6:4659) | `app/support.tsx` |
-| Support › About (26:652) | `app/about.tsx` |
-
-### The chat screen follows a second file
-
-The transcript, nav bar, and composer follow the [ChatGPT Apps UI
-Kit](https://www.figma.com/design/rR8Yz5BLDtLM1EKCPalwY3/ChatGPT-Apps-UI-Kit--Community-?node-id=4420-1535)
-(node `4420:1535`, framed at 390 × 844) rather than the original template, which
-is a generation behind. What that changes:
-
-- Turns carry no avatar and no "You" / "ChatGPT" label. The user's message is a
-  right-aligned gray capsule; the assistant's is plain body text at full width.
-  Dropping those two columns is most of what removes the old layout's whitespace.
-- Each finished assistant reply gets an action row — copy, read aloud, the two
-  votes, regenerate, share (`src/components/MessageActions.tsx`). Copy, read
-  aloud, regenerate, and share are wired; the votes are local state only.
-- The composer is a single flat pill (`+` · *Ask anything* · mic · round button)
-  that no longer expands and collapses. The round button cycles submit → stop →
-  voice with the chat's state.
-- The nav bar reads *ChatGPT 5 ›* and gains an overflow button beside the
-  compose glyph. GPT-5 is now the default model and a third row in the picker.
-
-Type on this screen is one point larger than the rest of the app (18pt body
-against 17pt) with tighter leading, which is the "bigger text, less space" pair
-the kit uses. Those live as `chatBody` / `chatBubble` / `navTitle` / `composer`
-in `src/theme/tokens.ts`; the other screens keep the original iOS ramp.
-
-Two things are extrapolations, because the Figma file implies them without
-drawing them: the chat-history drawer (`src/components/HistoryDrawer.tsx` — the
-menu button exists, the panel does not) and the email-capture step in
-`app/(auth)/signup.tsx` (the design jumps straight from Login to Verification).
-Both are marked as such in their file comments.
+From the chat screen: type a message for a streamed reply, pick the model in the
+composer, the ☰ icon for chat history, the headphones icon for the voice flow,
+and Settings from the drawer's footer row.
 
 ## 6. Project layout
 
 ```
+app.json                    static app config
+app.config.ts               adds the Google client IDs to `extra` at build time
+eas.json                    EAS Build profiles (production-apk emits an APK)
 app/                        expo-router routes (file = route)
   _layout.tsx               providers, auth guards, stack + presentations
-  (auth)/                   login, signup, verify-email
+  (auth)/login.tsx          the whole auth flow, one morphing sheet
   (app)/                    index (chat), new
   voice/                    index (welcome), choose, talking
-  settings.tsx  archived.tsx  support.tsx  about.tsx
+  settings.tsx  archived.tsx
+  support.tsx               Help Center
+  terms.tsx  privacy.tsx  about.tsx
 src/
+  hero/                     login background: clips manifest, video, scrim, phrases
+  auth/useEmailOtpAuth.ts   Clerk email-code flow
+  auth/useGoogleAuth.ts     native Sign in with Google
   theme/tokens.ts           palette, light/dark colors, iOS type ramp, layout
   theme/ThemeProvider.tsx   system|light|dark preference, persisted
-  components/               NavBar, Composer, MessageRow, MessageActions, GroupedList,
-                            ModelPicker, HistoryDrawer, PromptExamples, Icon, AppText,
-                            LaunchScreen
+  components/               NavBar, Composer, MessageRow, Markdown, CodeBlock,
+                            ModelSheet, HistoryDrawer, DocScreen, Icon, AppText, …
   store/ChatStore.tsx       conversations, streaming, auth, settings — persisted
-  lib/reply.ts              canned assistant replies + title derivation
+  lib/api.ts                the server client
   lib/scale.ts              maps the design's absolute coordinates to device width
   assets/icons.ts           GENERATED — do not edit
-assets/icons/               48 SVGs exported from Figma
-assets/img/                 profile, buy-me-a-coffee, user avatar
+assets/icons/               50 SVGs
+assets/videos/hero/         encoded hero clips (committed)
 scripts/gen-icons.mjs       assets/icons/*.svg -> src/assets/icons.ts
+scripts/encode-hero.sh      source video -> a 9:19.5 hero clip
+server/                     the API; see server/README.md
 ```
 
 ### Design tokens
 
-Colors, type, and layout constants live in `src/theme/tokens.ts`, transcribed
-from the design's own Figma variables — iOS semantic colors (`labels/secondary`
-= `rgba(60,60,67,0.6)`, `separators/non-opaque` = `#E5E5EA`, `fills/primary` =
-`rgba(120,120,128,0.36)`) plus the template's own palette. `ThemeProvider`
-resolves the light/dark pair and persists the user's `system | light | dark`
-choice.
+Colors, type, and layout constants live in `src/theme/tokens.ts` — iOS semantic
+colors (`labels/secondary` = `rgba(60,60,67,0.6)`, `separators/non-opaque` =
+`#E5E5EA`, `fills/primary` = `rgba(120,120,128,0.36)`) plus the app's own palette.
+`ThemeProvider` resolves the light/dark pair and persists the user's
+`system | light | dark` choice.
 
-Type uses the platform UI font: SF Pro on iOS via `System`, Roboto on Android.
-SF Pro cannot be redistributed, so its optical weights (510 Medium, 590
-Semibold) map to the nearest Android numeric weight.
+Type uses the platform UI font: SF Pro on iOS via `System`, Roboto on Android. SF
+Pro cannot be redistributed, so its optical weights (510 Medium, 590 Semibold) map
+to the nearest Android numeric weight.
 
 ### Icons
 
-Icons are the **exported Figma vectors**, never hand-drawn. `scripts/gen-icons.mjs`
-inlines `assets/icons/*.svg` into `src/assets/icons.ts` and rewrites single-ink
-fills/strokes to `currentColor` so `<Icon color=… />` can theme them;
-genuinely multi-color marks (Google, Doge, the OpenAI avatar, the badges) keep
-their own fills.
-
-After adding or replacing an SVG in `assets/icons/`:
+Icons are SVGs in `assets/icons/`, never hand-drawn in JSX. `scripts/gen-icons.mjs`
+inlines them into `src/assets/icons.ts` and rewrites single-ink fills and strokes
+to `currentColor` so `<Icon color=… />` can theme them; genuinely multi-color
+marks keep their own fills.
 
 ```bash
 node scripts/gen-icons.mjs
 ```
 
 If a new icon should be themeable, add its filename to the `MONO` set at the top
-of that script before regenerating.
+of that script before regenerating. Provider marks in the model picker are a
+separate path — fetched from a CDN at runtime (`src/lib/modelIcon.ts`) rather than
+bundled, because the icon package is one 3.6MB barrel that Metro will not
+tree-shake.
 
-The chat screen's action row and composer also draw on **Feather** and
-**MaterialIcons** from `@expo/vector-icons`, for glyphs the original template
-never exported (thumbs up/down, share, the waveform). Their outlines match the
-kit's stroke weight. Everything the template *does* export still comes from
-`assets/icons/` — no icon anywhere is hand-drawn.
+The chat screen's action row and composer also draw on Feather and MaterialIcons
+from `@expo/vector-icons` for a few glyphs the icon set never included.
+
+### The login hero
+
+`scripts/encode-hero.sh <source> <out-name> [start-seconds]` centre-crops a video
+to 9:19.5, trims 6s, strips audio, and writes faststart H.264 at CRF 26. Add the
+result to `src/hero/clips.ts` and it joins the rotation.
+
+The script never upscales: a 9:19.5 window on a 1080p landscape source has only
+~498px of real width, and stretching that to 1080 bakes in blur and pays file size
+for it. Outputs are capped at 1080 wide but keep their own size below it, and
+`contentFit="cover"` treats them all the same at draw time.
+
+Encoded clips are committed — `require()` resolves at build time — while the large
+sources are gitignored.
 
 ## 7. Behavior notes
 
-**Replies are simulated.** There is no API key and no network call. `src/lib/reply.ts`
-holds canned answers matched to the design's own sample prompts, and
-`ChatStore` streams them at 3 characters per 28 ms. That's what makes the
-Typing / Getting-answer / Scrolling states reachable. To use a real model,
-replace the `generateReply` call inside `sendMessage`
-(`src/store/ChatStore.tsx`) with a request to your backend and push each chunk
-through the same `patchConversation` update the interval already uses — nothing
-above that function needs to change.
+**Replies are real.** The app posts to `server/`, which proxies an
+OpenAI-compatible endpoint and streams the reply back over SSE. The model list is
+read from that endpoint at runtime, so enabling a model upstream is the whole of
+the work; nothing in the app or the server names one.
 
-**Code blocks can run.** A fence in a language the sandbox supports gets a Run
-pill; pressing it executes the code in a throwaway Firecracker microVM on Deno
-Deploy and shows stdout, stderr, the exit code and the elapsed time. Python, C,
-C++, Java, TypeScript/JavaScript and shell are wired. It is optional and off
-until a token is configured — setup and architecture are in
-[`server/SANDBOX.md`](server/SANDBOX.md).
+**Temporary chats are not stored.** No rows on the server, nothing in
+AsyncStorage. They live in memory until the screen closes.
 
-**The action row does real work.** Copy uses `expo-clipboard`, read aloud uses
-`expo-speech`, share uses React Native's `Share`, and regenerate re-streams the
-reply through the same `startStream` helper `sendMessage` uses
-(`src/store/ChatStore.tsx`). The thumbs are local component state — there is no
-backend to send a rating to.
+**Web search is per-message and off by default.** With it on, the reply's sources
+are listed underneath it.
 
-**Voice is UI-only.** The Talking screen animates the design's shapes; it does
-not record audio (`expo-av`/`expo-speech` would be the next step, and neither is
-needed for the design).
+**Attachments** go through an upload pipeline (Transloadit) which re-encodes images
+and renders document pages; the server keeps only URLs and extracted text, never
+the file.
 
-**Persistence.** Conversations, model, voice, haptics, and auth state are stored
-in AsyncStorage under `chatgpt-clone/state-v1`; the theme preference under
-`chatgpt-clone/color-scheme`. To reset, delete and reinstall the app in Expo Go,
-or clear its data.
+**Code blocks can run.** A fence in a supported language gets a Run pill, executed
+in a throwaway Firecracker microVM on Deno Deploy with egress blocked. Python, C,
+C++, Java, TypeScript/JavaScript and shell are wired. Optional and off until a
+token is configured — see [`server/SANDBOX.md`](server/SANDBOX.md).
+
+**Dictation** records from the composer's mic and transcribes server-side; the clip
+is never stored. Voice *mode* (the full-screen flow) is UI only — it animates but
+does not hold a conversation.
+
+**Persistence.** Conversations, model, voice, haptics and archived chats live in
+AsyncStorage under `loom/state-v1`; the theme preference under
+`loom/color-scheme`. Both read the pre-rename keys once if the current one is
+empty, so an existing install keeps its data. Clerk owns the session, in
+expo-secure-store.
 
 ## 8. Verify
 
 ```bash
-npx tsc --noEmit     # types
-npx expo-doctor      # config + dependency health (21/21 should pass)
+npx tsc --noEmit                    # app types
+cd server && npm run typecheck      # server types
+npx expo-doctor                     # config + dependency health
 npx expo export --platform all --output-dir /tmp/check && rm -rf /tmp/check
 ```
 
-All three pass on this tree.
-
 ## 9. Troubleshooting
 
-**`Unable to resolve module react-native-worklets`** — Reanimated 4 requires it
-as a peer. `npm install react-native-worklets@0.10.1 --legacy-peer-deps`.
+**`Unable to resolve module react-native-worklets`** — Reanimated 4 requires it as
+a peer. `npm install react-native-worklets@0.10.1 --legacy-peer-deps`.
 
-**`Cannot find module 'babel-preset-expo'`** — it must be a direct dependency,
-not just hoisted under `expo/`. It's in `devDependencies`; re-run the install.
+**`Cannot find module 'babel-preset-expo'`** — it must be a direct dependency, not
+just hoisted under `expo/`. It's in `devDependencies`; re-run the install.
 
 **Do not add `react-native-worklets/plugin` to `babel.config.js`.**
-`babel-preset-expo` adds it automatically when the package is installed; listing
-it twice breaks the transform.
+`babel-preset-expo` adds it automatically when the package is installed; listing it
+twice breaks the transform.
+
+**The hero is black, or the app crashes on the login screen** — `expo-video` needs
+a dev client. Rebuild with `npx expo run:android` / `run:ios` after any change to
+`app.json`'s plugins.
 
 **Stale bundle after dependency changes** — `npx expo start --clear`.
 
-**`Project is incompatible with this version of Expo Go`** — your Expo Go is a
-different SDK than this project (SDK 57). Updating from the store usually does
-*not* fix it: the App Store build stops at SDK 54 and the Play Store build lags.
-Install the SDK 57 build from <https://expo.dev/go> (Android/emulators/iOS
-Simulator) or <https://sign.expo.dev> (physical iOS), then `npx expo start`
-again. See *Get the SDK 57 build of Expo Go first* in section 3.
+**The app cannot reach the API** — `EXPO_PUBLIC_API_URL` must be an address the
+device can route to, and env changes need `--clear` to take effect.
 
-## 10. Native builds (optional)
-
-Expo Go covers everything here. If you want a standalone app:
+## 10. Native builds
 
 ```bash
 npm install --global eas-cli
 eas login
-eas build --profile preview --platform ios      # or android
+eas build --profile production-apk --platform android    # installable APK
+eas build --profile production --platform android        # AAB, for Play
 ```
 
-Change `ios.bundleIdentifier` / `android.package` in `app.json` from
-`com.example.chatgptclone` first.
+`eas.json` has `development`, `preview`, `production` and `production-apk`.
 
-## 11. Credits and license
+`.env` is gitignored, so EAS Build never uploads it. Anything the app reads from
+`process.env` has to exist as an EAS environment variable too, or the build will
+ship with it empty:
 
-UI design: **Iosi Pratama** — [posts.CV](https://posts.cv/iosipratama) ·
-[x.com/iosipratama](https://x.com/iosipratama) ·
-[Buy Me A Coffee](https://buymeacoffee.com/iosipratama).
+```bash
+eas env:create --name EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY --value pk_… --environment production --visibility plaintext
+eas env:create --name EXPO_PUBLIC_API_URL --value https://… --environment production --visibility plaintext
+```
 
-The template's own terms, reproduced on the in-app About screen: personal and
-educational use only; do not resell or redistribute. ChatGPT and the OpenAI mark
-belong to OpenAI — this is a UI study, not affiliated with or endorsed by OpenAI.
+`ios.bundleIdentifier` and `android.package` in `app.json` are
+`com.example.loom` — change them to a domain you own before submitting anywhere.
+Changing the Android package invalidates the Google OAuth client and Clerk's
+native-application entry, both of which are keyed on it.
+
+## 11. Legal
+
+Terms of Use and the Privacy Policy are in the app, at `app/terms.tsx` and
+`app/privacy.tsx`. Both carry `[Operator name]` and a placeholder support address
+that a real deployment has to fill in, and the privacy policy names the processors
+the code actually calls — keep it in step with the dependencies.
+
+Replies are generated by third-party models and can be wrong. Nothing the app
+produces is professional advice.

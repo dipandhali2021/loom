@@ -6,4 +6,4 @@
  *
  * `null` is the bare dot, which is how the design's first Login variant reads.
  */
-export const PHRASES = [null, 'Mirai', 'Let’s brainstorm', 'Let’s go'] as const;
+export const PHRASES = [null, 'Loom', 'Let’s brainstorm', 'Let’s go'] as const;

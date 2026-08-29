@@ -1,153 +1,157 @@
 import React from 'react';
-import { Image, Linking, Pressable, ScrollView, StyleSheet, View } from 'react-native';
-import { useRouter } from 'expo-router';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Icon } from '../src/components/Icon';
+import { Linking, Pressable, StyleSheet } from 'react-native';
 import { AppText } from '../src/components/AppText';
-import { useTheme } from '../src/theme/ThemeProvider';
-import { palette, type } from '../src/theme/tokens';
+import { Bullets, DocScreen, Prose, Section } from '../src/components/DocScreen';
+import { type } from '../src/theme/tokens';
 
-const BMC_URL = 'https://buymeacoffee.com/iosipratama';
-const DOGE_ADDRESS = 'D92Y5QvroPK4NCsHvHG5eQxnrGcDPy8wQD';
-const SOCIALS = [
-  { label: 'posts.CV - @iosipratama', url: 'https://posts.cv/iosipratama' },
-  { label: 'x / previously Twitter - @iosipratama', url: 'https://x.com/iosipratama' },
-];
+/**
+ * Help Center, reached from Settings > Help Center.
+ *
+ * Written against what the app actually does, not around it: every answer here is
+ * checkable in the code, and a feature that is a placeholder says so. A help page
+ * that describes an app more capable than the one installed costs more support mail
+ * than it saves.
+ */
 
-/** Support (Figma 37:666), reached from Settings > Help Center. */
+const SUPPORT_EMAIL = 'support@example.com';
+
 export default function SupportScreen() {
-  const router = useRouter();
-  const insets = useSafeAreaInsets();
-  const { colors } = useTheme();
-
   return (
-    <View style={[styles.screen, { backgroundColor: colors.bgPrimary }]}>
-      <ScrollView
-        contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 20) + 32 }}
-        showsVerticalScrollIndicator={false}
-      >
-        {/* Banner is 411pt wide on a 393pt frame — it bleeds past both edges. */}
-        <View style={[styles.banner, { height: 138 + insets.top }]} />
+    <DocScreen title="Help Center">
+      <Section title="Signing in">
+        <Prose>
+          Loom signs you in with a six-digit code sent to your email address. There is no password to
+          forget: enter your address, and whether the account already exists or not, the next screen is
+          the code. Codes expire, so request a new one if the old one stops working. If the code does
+          not arrive, check the spam folder before requesting another — asking repeatedly can trip the
+          rate limit and slow things down.
+        </Prose>
+        <Prose>
+          You can also continue with Google, which uses your device&rsquo;s own account picker rather than
+          opening a browser. If the Google button is greyed out, this build was not set up for it &mdash; use
+          email instead. The Apple button is not connected yet.
+        </Prose>
+      </Section>
 
-        {/* The frame has no nav bar; a pushed screen needs a way back. */}
-        <Pressable
-          onPress={() => router.back()}
-          hitSlop={12}
-          style={[styles.back, { top: insets.top + 10 }]}
-          accessibilityRole="button"
-          accessibilityLabel="Back"
-        >
-          <Icon name="chevron-left" size={24} color={palette.black} />
-        </Pressable>
-
-        <Image
-          source={require('../assets/img/profile.png')}
-          style={[styles.profile, { top: insets.top + 80 }]}
-          accessibilityIgnoresInvertColors
+      <Section title="Chats">
+        <Prose>
+          A reply streams in as it is written. The round button in the composer becomes a stop button
+          while it does, and stopping keeps whatever had already arrived.
+        </Prose>
+        <Bullets
+          items={[
+            'Pin a chat from the overflow menu to hold it at the top of the list. Pins follow your account to other devices.',
+            'Archiving hides a chat from the list on this device. It stays on the server and is not shared with your other devices.',
+            'Deleting a chat removes it and its messages from the server. It cannot be undone.',
+            'Share copies the conversation as plain text, not as a link. Nothing is published.',
+          ]}
         />
+      </Section>
 
-        <View style={styles.content}>
-          <Section title="About Me">
-            <AppText tone="primary" style={type.message}>
-              Hi, I&apos;m Iosi, an iOS app designer. I create resources to help you design better apps. If you find my
-              work useful, please support me to keep making more.
-            </AppText>
-          </Section>
+      <Section title="Temporary chats">
+        <Prose>
+          A temporary chat is never written down. It is not saved on this device, no rows are created on
+          the server, and it disappears when you leave the screen — so it also will not appear in your
+          history later. Your message is still sent to the model provider to be answered.
+        </Prose>
+      </Section>
 
-          <View style={styles.support}>
-            <AppText tone="primary" style={type.title3Bold}>
-              Support
-            </AppText>
+      <Section title="Choosing a model">
+        <Prose>
+          The model picker lives in the composer, beside the field it applies to. The list comes from
+          the server rather than being built into the app, so a newly enabled model appears without an
+          update. Opening the picker refreshes it.
+        </Prose>
+        <Prose>
+          The model is a property of the message you are writing. Changing it affects the next message,
+          not the ones already in the chat.
+        </Prose>
+      </Section>
 
-            <Pressable
-              onPress={() => Linking.openURL(BMC_URL)}
-              style={({ pressed }) => [styles.donateRow, { opacity: pressed ? 0.6 : 1 }]}
-              accessibilityRole="link"
-              accessibilityLabel="Buy Me A Coffee"
-            >
-              <View style={styles.bmcBadge}>
-                <Image source={require('../assets/img/bmc.png')} style={styles.bmcImage} accessibilityIgnoresInvertColors />
-              </View>
-              <View style={styles.donateText}>
-                <AppText tone="primary" style={type.title3Semibold}>
-                  Buy Me A Coffee
-                </AppText>
-                <AppText tone="primary" style={[type.mono, styles.link]}>
-                  buymeacoffee.com/iosipratama
-                </AppText>
-              </View>
-            </Pressable>
+      <Section title="Web search">
+        <Prose>
+          With search on, a reply may look things up before answering, and the pages it read are listed
+          under the reply. Search is off by default and set per message. It is a live web request, so
+          the query leaves the app.
+        </Prose>
+      </Section>
 
-            <View style={styles.donateRow}>
-              <Icon name="doge" size={60} />
-              <View style={styles.donateText}>
-                <AppText tone="primary" style={type.title3Semibold}>
-                  Doge Coin
-                </AppText>
-                <AppText tone="primary" style={[type.mono, styles.address]} selectable>
-                  {DOGE_ADDRESS}
-                </AppText>
-              </View>
-            </View>
-          </View>
+      <Section title="Attachments">
+        <Prose>
+          Attach a photo from your library, take one with the camera, or attach a document. Images are
+          re-encoded and documents have their first pages rendered and their text extracted, then the
+          result is passed to the model.
+        </Prose>
+        <Prose>
+          Attachment processing runs on a third-party pipeline, and the processed files are stored there
+          rather than on our own servers. Do not attach anything you would not want handled that way.
+        </Prose>
+      </Section>
 
-          <Section title="Social Media">
-            {SOCIALS.map((social) => (
-              <Pressable
-                key={social.url}
-                onPress={() => Linking.openURL(social.url)}
-                accessibilityRole="link"
-                accessibilityLabel={social.label}
-              >
-                <AppText tone="primary" style={[type.message, styles.link]}>
-                  {social.label}
-                </AppText>
-              </Pressable>
-            ))}
-          </Section>
-        </View>
-      </ScrollView>
-    </View>
-  );
-}
+      <Section title="Running code">
+        <Prose>
+          A code block in a language we support gets a Run button. The code executes in a throwaway
+          virtual machine that is destroyed afterwards, and you see stdout, stderr, the exit code and
+          how long it took. It has no access to your device or your files.
+        </Prose>
+        <Prose>
+          This depends on server configuration. Where it has not been set up, the Run button does not
+          appear.
+        </Prose>
+      </Section>
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <View style={styles.section}>
-      <AppText tone="primary" style={type.title3Bold}>
-        {title}
-      </AppText>
-      {children}
-    </View>
+      <Section title="Voice">
+        <Prose>
+          The mic in the composer records a clip and transcribes it into the field, where you can edit
+          it before sending. The clip is not stored — it is held only for the length of the request.
+        </Prose>
+        <Prose>
+          Voice mode, reached from the round button, is a preview. It animates but does not yet hold a
+          spoken conversation.
+        </Prose>
+      </Section>
+
+      <Section title="Appearance and haptics">
+        <Prose>
+          Settings has Light, Dark and System for the colour scheme, and a switch for haptic feedback.
+          Both are stored on this device only.
+        </Prose>
+      </Section>
+
+      <Section title="Known limits">
+        <Bullets
+          items={[
+            'Apple sign-in is a placeholder. Google and email both work.',
+            'Voice mode does not hold a conversation yet.',
+            'Subscription, Restore purchases, Data Controls, Custom instructions and Main Language are not wired up.',
+            'Thumbs up and down on a reply are not sent anywhere.',
+            'A reply that was mid-stream when the app closed does not resume.',
+          ]}
+        />
+      </Section>
+
+      <Section title="Getting in touch">
+        <Prose>
+          If something is broken, or you want your account and its data deleted, email us. Say which
+          device and OS version you are on and roughly when it happened — that is usually enough to
+          find it.
+        </Prose>
+        <Pressable
+          onPress={() => Linking.openURL(`mailto:${SUPPORT_EMAIL}`)}
+          accessibilityRole="link"
+          accessibilityLabel={`Email ${SUPPORT_EMAIL}`}
+          style={({ pressed }) => [styles.mailRow, { opacity: pressed ? 0.6 : 1 }]}
+        >
+          <AppText tone="primary" style={[type.message, styles.link]}>
+            {SUPPORT_EMAIL}
+          </AppText>
+        </Pressable>
+      </Section>
+    </DocScreen>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1 },
-  banner: { backgroundColor: palette.supportBanner, marginHorizontal: -9 },
-  back: { position: 'absolute', left: 16, width: 24, height: 24 },
-  profile: { position: 'absolute', left: 16, width: 100, height: 100, borderRadius: 50 },
-  content: { paddingHorizontal: 16, paddingTop: 66, gap: 32 },
-  section: { gap: 8 },
-  support: { gap: 20 },
-  donateRow: { flexDirection: 'row', gap: 16, alignItems: 'center' },
-  bmcBadge: {
-    width: 60,
-    height: 60,
-    borderRadius: 100,
-    backgroundColor: palette.buyMeACoffee,
-    alignItems: 'center',
-    justifyContent: 'center',
-    overflow: 'hidden',
-    // Design: 0 2 8 rgba(0,0,0,0.05).
-    shadowColor: '#000',
-    shadowOpacity: 0.05,
-    shadowOffset: { width: 0, height: 2 },
-    shadowRadius: 8,
-    elevation: 2,
-  },
-  bmcImage: { width: 52, height: 52 },
-  donateText: { gap: 2, flexShrink: 1 },
+  mailRow: { alignSelf: 'flex-start' },
   link: { textDecorationLine: 'underline' },
-  address: { letterSpacing: 0.8 },
 });

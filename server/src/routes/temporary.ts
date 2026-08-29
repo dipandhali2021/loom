@@ -87,7 +87,7 @@ export async function postTemporaryCompletion(req: Request, res: Response): Prom
   const profile: AgentProfile = stored ?? {
     id: '',
     userId: user.id,
-    displayName: 'Mirai',
+    displayName: 'Loom',
     tone: 'neutral',
     verbosity: 'balanced',
     customInstructions: '',

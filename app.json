@@ -1,14 +1,14 @@
 {
   "expo": {
-    "name": "ChatGPT",
-    "slug": "chatgpt-ios-clone",
+    "name": "Loom",
+    "slug": "loom",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.example.chatgptclone"
+      "bundleIdentifier": "com.example.loom"
     },
     "android": {
       "adaptiveIcon": {
@@ -18,7 +18,7 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.example.chatgptclone"
+      "package": "com.example.loom"
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -31,19 +31,20 @@
       [
         "expo-audio",
         {
-          "microphonePermission": "Allow ChatGPT to use the microphone so you can dictate a message and talk in voice mode."
+          "microphonePermission": "Allow Loom to use the microphone so you can dictate a message and talk in voice mode."
         }
       ],
       [
         "expo-image-picker",
         {
-          "photosPermission": "Allow ChatGPT to access your photos so you can attach one to a message.",
-          "cameraPermission": "Allow ChatGPT to use the camera so you can attach a photo you take."
+          "photosPermission": "Allow Loom to access your photos so you can attach one to a message.",
+          "cameraPermission": "Allow Loom to use the camera so you can attach a photo you take."
         }
       ],
-      "expo-video"
+      "expo-video",
+      "@clerk/expo-google-signin"
     ],
-    "scheme": "chatgptclone",
+    "scheme": "loom",
     "experiments": {
       "typedRoutes": true
     }

@@ -8,14 +8,13 @@ import { useTheme } from '../../src/theme/ThemeProvider';
 import { layout, palette, type } from '../../src/theme/tokens';
 
 /**
- * The four feature items, in the order the design stacks them
- * (Figma 11:608 / 11:626 / 11:614 / 11:620 at y = 167 / 251 / 336 / 421).
+ * The four feature items, in the order the design stacks them.
  */
 const ITEMS: { icon: IconName; title: string; body: string }[] = [
   {
     icon: 'recording-01',
     title: 'Just start talking',
-    body: 'Now you can have spoken conversations with ChatGPT.',
+    body: 'Now you can have spoken conversations with Loom.',
   },
   {
     icon: 'headphones-01',
@@ -34,7 +33,7 @@ const ITEMS: { icon: IconName; title: string; body: string }[] = [
   },
 ];
 
-/** Voice Chat > Welcome (Figma 11:603). */
+/** Voice Chat > Welcome. */
 export default function VoiceWelcomeScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -46,8 +45,8 @@ export default function VoiceWelcomeScreen() {
         <AppText tone="primary" style={type.voiceTitle}>
           Chat with voice
         </AppText>
-        {/* The Figma frame has no dismiss control; a full-screen modal needs one,
-            so this reuses the Close treatment from the Choose-a-voice frame. */}
+        {/* The design frame has no dismiss control; a full-screen modal needs one,
+            so this reuses the Close treatment from the Choose-a-voice screen. */}
         <Pressable
           onPress={() => router.back()}
           hitSlop={12}

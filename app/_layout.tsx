@@ -41,6 +41,8 @@ function Shell() {
           <Stack.Screen name="settings" options={{ presentation: 'modal' }} />
           <Stack.Screen name="about" options={{ presentation: 'card' }} />
           <Stack.Screen name="support" options={{ presentation: 'card' }} />
+          <Stack.Screen name="terms" options={{ presentation: 'card' }} />
+          <Stack.Screen name="privacy" options={{ presentation: 'card' }} />
           <Stack.Screen name="archived" options={{ presentation: 'card' }} />
           <Stack.Screen name="voice" options={{ presentation: 'fullScreenModal', animation: 'fade' }} />
         </Stack.Protected>

@@ -44,7 +44,7 @@ One press of Run, from the pill to the microVM and back:
 │                       │   │   ├─ claim volumeInUse            │   │                            │
 │                       │   │   ├─ Volume.get/create   ─────────│──▶│ vol_ord_…   400MB  per user│
 │                       │   │   ├─ Sandbox.create      ─────────│──▶│ sbx_ord_…   Firecracker VM │
-│                       │   │   │    root = mirai-toolchains    │   │   ├ / (ro)  gcc g++ py jdk │
+│                       │   │   │    root = loom-toolchains     │   │   ├ / (ro)  gcc g++ py jdk │
 │                       │   │   │    volumes {/workspace: vol}  │   │   ├ /workspace (rw)        │
 │                       │   │   │    allowNet: []               │   │   └ egress blocked         │
 │                       │   │   ├─ fs.writeTextFile main.py     │   │                            │
@@ -115,7 +115,7 @@ who can hold them.
 | | **Sandbox** | **Volume** | **Snapshot** |
 | --- | --- | --- | --- |
 | What it is | A running Firecracker microVM — CPU, RAM, kernel, processes | A block device. Storage only, nothing executes | A frozen, read-only copy of a volume |
-| Id shape | `sbx_ord_…` | `vol_ord_…` (or its slug) | slug, e.g. `mirai-toolchains` |
+| Id shape | `sbx_ord_…` | `vol_ord_…` (or its slug) | slug, e.g. `loom-toolchains` |
 | Lifetime | Seconds. Killed after one run, or reaped at its `timeout` | Indefinite, until deleted | Indefinite, until deleted |
 | Writable | Yes, but only where a rw volume is mounted | Yes | **No, ever** |
 | How many at once | **Capped: 5 per org.** The scarce thing | Not in the quota list | Not in the quota list |
@@ -138,7 +138,7 @@ second press by the same user can fall back to running without it.
 
 A volume is also the only way to *build* an image: you cannot write to a
 snapshot, so provisioning installs into a writable volume and freezes the result.
-That is the entire job of `mirai-toolchain-build`.
+That is the entire job of `loom-toolchain-build`.
 
 Two consequences that cause confusing errors later, both in [§9](#9-troubleshooting):
 a volume cannot be deleted while a sandbox holds it, and a volume cannot be
@@ -151,11 +151,11 @@ deleted while a snapshot was cut from it.
         │
         │  provision, ONCE  (§5)
         ▼
-  mirai-toolchain-build     8GB    rw     scratch. apt runs here. kept only because
+  loom-toolchain-build      8GB    rw     scratch. apt runs here. kept only because
         │                                 a volume with snapshots cannot be deleted
         │  volumes.snapshot()
         ▼
-  mirai-toolchains        0.85GB   RO     ◀── every run boots this as /
+  loom-toolchains         0.85GB   RO     ◀── every run boots this as /
         │                                     gcc 14.2 · g++ 14.2 · python 3.13.5
         │                                     openjdk 21.0.10 · deno 2.9.5
         │  root: on every Sandbox.create
@@ -164,9 +164,9 @@ deleted while a snapshot was cut from it.
   │ sbx_ord_…   one per press, ~1s boot, then destroyed   │
   │                                                       │
   │   /                 from the snapshot, READ-ONLY      │
-  │   /workspace        mirai-ws-<userhex>  400MB  rw     │──▶ survives the run
-  │   /tmp/mirai        run dir when no volume  (ephemeral)│
-  │   /tmp/mirai-io     run.sh, out, err        (ephemeral)│
+  │   /workspace        loom-ws-<userhex>   400MB  rw     │──▶ survives the run
+  │   /tmp/loom         run dir when no volume  (ephemeral)│
+  │   /tmp/loom-io      run.sh, out, err        (ephemeral)│
   └───────────────────────────────────────────────────────┘
 ```
 
@@ -179,7 +179,7 @@ of one press. Putting it on the volume would spend the user's 400MB on it and
 leave the previous run's output there for the next run to trip over.
 
 The slug is derived from the user's row id, not stored:
-`mirai-ws-` + 23 hex characters of the UUID = exactly 32, the platform's ceiling.
+`loom-ws-` + 24 hex characters of the UUID = exactly 32, the platform's ceiling.
 No migration, no extra column, and the volume is identifiable in the dashboard.
 
 ### 1.5 Request lifecycle, and what each failure looks like
@@ -428,7 +428,7 @@ Expect **3–6 minutes**, nearly all of it one `apt-get`. Output looks like:
 
 ```
 [provision] region ord
-[provision] snapshot slug mirai-toolchains
+[provision] snapshot slug loom-toolchains
 [provision] creating a bootable volume from builtin:debian-13
 [provision] booting a sandbox on it (writable root)
 [provision] installing build-essential, python3, default-jdk
@@ -445,23 +445,23 @@ Expect **3–6 minutes**, nearly all of it one `apt-get`. Output looks like:
 [provision] shutting the sandbox down to release the volume
 [provision] freezing the volume into a snapshot
 
-[provision] Done. Snapshot "mirai-toolchains" (0.85 GB) in ord.
+[provision] Done. Snapshot "loom-toolchains" (0.85 GB) in ord.
 
             Put this in server/.env:
 
-              SANDBOX_SNAPSHOT="mirai-toolchains"
+              SANDBOX_SNAPSHOT="loom-toolchains"
 ```
 
 Copy that last line into `server/.env`:
 
 ```ini
-SANDBOX_SNAPSHOT="mirai-toolchains"
+SANDBOX_SNAPSHOT="loom-toolchains"
 ```
 
 The script is **idempotent**. Run it again and it says:
 
 ```
-[provision] Snapshot "mirai-toolchains" already exists (0.85 GB).
+[provision] Snapshot "loom-toolchains" already exists (0.85 GB).
 [provision] Nothing to do. Re-run with --force to rebuild it.
 ```
 
@@ -524,7 +524,7 @@ pulls no systemd, and `java`/`javac` are identical.
 npm run sandbox:provision      # should say "already exists"
 ```
 
-Or check the console: **Deploy → Snapshots** should list `mirai-toolchains`,
+Or check the console: **Deploy → Snapshots** should list `loom-toolchains`,
 ~0.85 GB, region `ord`, bootable.
 
 ---
@@ -658,7 +658,7 @@ The failure was one run's `output()` never resolving while another returned
 `Received stream enqueue for stream ID which does not exist: 0`. A run silently
 showing someone else's output is the worst bug this feature could have.
 
-So `run.ts` writes the recipe to `/tmp/mirai-io/run.sh`, spawns
+So `run.ts` writes the recipe to `/tmp/loom-io/run.sh`, spawns
 `bash -l …/run.sh > out 2> err` with all three stdio set to `null`, trims both
 files inside the VM, and reads them back with `fs.readTextFile` — a plain
 request/response call that touches none of the stream machinery.
@@ -723,9 +723,9 @@ budget concern.
 
 **Storage does accumulate.** Each user gets a 400MB volume on first run, plus
 the 8GB build volume, and volumes are not in the quota list above. After a test
-session with fake user ids you may find a dozen stray `mirai-ws-*` volumes; they
+session with fake user ids you may find a dozen stray `loom-ws-*` volumes; they
 are safe to delete at console.deno.com → **Volumes**, keeping
-`mirai-toolchain-build` (the snapshot needs it) and any volume belonging to a
+`loom-toolchain-build` (the snapshot needs it) and any volume belonging to a
 real user.
 
 ---
@@ -775,7 +775,7 @@ A sandbox is still running. `await using` does not stop the microVM — see
 
 A leftover provision sandbox still holds the volume. Reads like a platform fault
 and is not. `killProvisionSandboxes` sweeps them first, filtered on
-`{ app: 'mirai', purpose: 'provision' }` so the app's own run sandboxes
+`{ app: 'loom', purpose: 'provision' }` so the app's own run sandboxes
 (`purpose: 'run'`) are never touched.
 
 ### `The requested volume has snapshots (such as '…'), and cannot be deleted`

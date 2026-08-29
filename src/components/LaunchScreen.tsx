@@ -3,7 +3,7 @@ import { Animated, Easing, StyleSheet, View } from 'react-native';
 import { palette } from '../theme/tokens';
 
 /**
- * Launch Screen (Figma 36:668) — a single 27pt "Shape Animation" dot centred on
+ * Launch Screen — a single 27pt "Shape Animation" dot centred on
  * the frame. It carries the same treatment as the first Login variant it hands
  * off to, so the dot survives the transition into the auth stack.
  */

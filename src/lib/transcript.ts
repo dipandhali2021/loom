@@ -14,7 +14,7 @@ import type { Message } from '../store/types';
  */
 
 /** Who each turn is labelled as. The app's own name, as the user knows it. */
-const SPEAKER = { user: 'You', assistant: 'ChatGPT' } as const;
+const SPEAKER = { user: 'You', assistant: 'Loom' } as const;
 
 /** Blank line between turns; the labels are what separates them, not indentation. */
 const TURN_GAP = '\n\n';
@@ -22,7 +22,7 @@ const TURN_GAP = '\n\n';
 export function toShareText(title: string, messages: Message[]): string {
   const turns = messages
     // A reply still streaming, or one that failed before it wrote anything, has no
-    // text to share -- and a dangling "ChatGPT:" reads as the transcript being cut off.
+    // text to share -- and a dangling "Loom:" reads as the transcript being cut off.
     .filter((message) => message.text.trim().length > 0 || (message.attachments?.length ?? 0) > 0)
     .map((message) => {
       const attached = message.attachments ?? [];

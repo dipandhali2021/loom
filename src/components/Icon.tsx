@@ -15,9 +15,9 @@ type Props = {
 };
 
 /**
- * Renders one of the SVGs exported from Figma. The generated module tokenizes
+ * Renders one of the SVGs in `assets/icons`. The generated module tokenizes
  * single-color glyphs to `currentColor` so `color` can theme them; multi-color
- * marks (Google, Doge, the OpenAI avatar) ignore it and keep their own fills.
+ * marks (Google, Doge, the provider avatars) ignore it and keep their own fills.
  */
 export function Icon({ name, size = 24, color, width, height, style }: Props) {
   const w = width ?? size;

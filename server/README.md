@@ -1,6 +1,6 @@
-# mirai-server
+# loom-server
 
-Express 5 + Prisma 7 API for the Mirai Expo app. Authentication is Clerk; the
+Express 5 + Prisma 7 API for the Loom Expo app. Authentication is Clerk; the
 database is the pre-existing Neon Postgres instance.
 
 ## Why the schema looks the way it does
@@ -30,7 +30,7 @@ then `npm run prisma:generate`. Every file is `IF NOT EXISTS`/`ON CONFLICT DO
 NOTHING`, so running it twice is a no-op rather than an error.
 
 ```bash
-psql "$DIRECT_URL" -f prisma/migrations/004_conversation_pinned.sql
+psql "$DIRECT_URL" -f prisma/migrations/005_agent_display_name_default.sql
 npm run prisma:generate
 ```
 

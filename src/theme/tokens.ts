@@ -1,5 +1,5 @@
 /**
- * Design tokens transcribed from the ChatGPT iOS Figma template.
+ * The app's design tokens.
  * Values are the raw iOS system semantic colors the design leans on, so the
  * light/dark pairs below match Apple's own definitions where the design used them.
  */
@@ -11,7 +11,7 @@ export const BASE_WIDTH = 393;
 export const palette = {
   black: '#000000',
   white: '#FFFFFF',
-  /** Accent used by the ChatGPT wordmark on the Login 1 / Login 3 variants. */
+  /** Accent used by the wordmark on the login screen's first and third variants. */
   brandBlue: '#0000F5',
   /** Voice-onboarding primary button. */
   voiceBlue: '#3F46F5',
@@ -143,7 +143,7 @@ export const lightColors: ColorTokens = {
 };
 
 /**
- * Dark mode follows the shipping ChatGPT app rather than the iOS system greys:
+ * Dark mode is pure black rather than the iOS system greys:
  * every page, panel and chip sits on pure black, the user's turn is the one white
  * block in the transcript, and grey is spent on exactly two things — the chat type box (`composerFill`, and the raised cards
  * that share its value) and circular icon buttons (`sendButton`, `fillPrimary`),
@@ -273,7 +273,7 @@ export const type = {
    * about the reply rather than as the first line of one.
    */
   thinking: { fontFamily: systemFont, fontSize: 16, lineHeight: 22, letterSpacing: -0.2, ...weight('510') },
-  /** Nav bar title, "ChatGPT 5" — Semibold 22/27, two steps up from the kit's 18. */
+  /** Nav bar title — Semibold 22/27, two steps up from the design kit's 18. */
   navTitle: { fontFamily: systemFont, fontSize: 22, lineHeight: 27, letterSpacing: -0.4, ...weight('590') },
   /** Composer field and its "Ask anything" placeholder. */
   composer: { fontFamily: systemFont, fontSize: 18, lineHeight: 24, letterSpacing: -0.2, ...weight('400') },
@@ -300,7 +300,7 @@ export const type = {
   },
 } satisfies Record<string, TextStyle>;
 
-/** Layout constants read straight off the Figma frames. */
+/** Layout constants read straight off the design frames. */
 export const layout = {
   navBarHeight: 44,
   /**
