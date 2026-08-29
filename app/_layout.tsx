@@ -11,13 +11,11 @@ import { LaunchScreen } from '../src/components/LaunchScreen';
 
 function Shell() {
   const { colors, scheme } = useTheme();
-  const { hydrated, signedIn, emailVerified } = useChatStore();
+  const { hydrated, signedIn } = useChatStore();
 
   // Until AsyncStorage has been read we don't know which stack to show, so the
   // design's Launch Screen stands in.
   if (!hydrated) return <LaunchScreen />;
-
-  const signedInAndVerified = signedIn && emailVerified;
 
   return (
     <>
@@ -34,11 +32,11 @@ function Shell() {
          * every segment change and can loop. expo-router evaluates these instead and
          * moves off any screen that becomes unavailable.
          */}
-        <Stack.Protected guard={!signedInAndVerified}>
+        <Stack.Protected guard={!signedIn}>
           <Stack.Screen name="(auth)" />
         </Stack.Protected>
 
-        <Stack.Protected guard={signedInAndVerified}>
+        <Stack.Protected guard={signedIn}>
           <Stack.Screen name="(app)" />
           <Stack.Screen name="settings" options={{ presentation: 'modal' }} />
           <Stack.Screen name="about" options={{ presentation: 'card' }} />

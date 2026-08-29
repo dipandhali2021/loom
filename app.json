@@ -40,7 +40,8 @@
           "photosPermission": "Allow ChatGPT to access your photos so you can attach one to a message.",
           "cameraPermission": "Allow ChatGPT to use the camera so you can attach a photo you take."
         }
-      ]
+      ],
+      "expo-video"
     ],
     "scheme": "chatgptclone",
     "experiments": {

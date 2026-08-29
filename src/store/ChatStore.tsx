@@ -55,7 +55,7 @@ function describeAttachments(attachments: ApiAttachment[]): string {
 }
 
 /*
- * Bumped from v1: `signedIn` / `emailVerified` / `email` used to be persisted here.
+ * Bumped from v1: `signedIn` / `email` used to be persisted here.
  * Clerk owns the session now, and the hydrate below spreads whatever it reads over
  * the defaults -- so a v1 payload would reinstate a stale "signed in" that no Clerk
  * session backs. A new key retires those records instead of migrating them.
@@ -82,12 +82,14 @@ type ChatStoreValue = PersistedState & {
   /** Storage has been read *and* Clerk has loaded; until then the launch screen shows. */
   hydrated: boolean;
   /**
-   * Past the login screen: either a live session, or an outstanding email code.
-   * The (auth) stack pairs this with `emailVerified` to pick login vs verify-email.
+   * A live Clerk session exists -- the one thing that decides (auth) vs (app).
+   *
+   * An outstanding email code does *not* count. The login screen holds the whole
+   * flow in one sheet, so it has to stay mounted while a code is pending; a flag
+   * that flipped here on send would unmount it and tear down its video hero
+   * mid-flow. Which step the sheet shows is `pendingVerification`'s job.
    */
   signedIn: boolean;
-  /** A live Clerk session exists. Only true once a code has been verified. */
-  emailVerified: boolean;
   /** Signed-in user's primary address, or the address a pending code went to. */
   email: string | null;
   active: Conversation | null;
@@ -180,9 +182,10 @@ const ChatContext = createContext<ChatStoreValue | null>(null);
 export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   /*
    * Clerk is the only source of truth for who is signed in; none of it is
-   * persisted here. `pendingVerification` covers the gap that `email_code`
+   * persisted here. `pendingVerification` describes the gap that `email_code`
    * creates -- between requesting a code and verifying it there is no session
-   * yet, so `isSignedIn` is false even though the user is past the login screen.
+   * yet -- which the login sheet reads to decide which step to show. It is
+   * deliberately not folded into `signedIn`: see that field's note.
    */
   const { isLoaded: clerkLoaded, isSignedIn, signOut: clerkSignOut, getToken } = useAuth();
   const { pendingVerification, pendingEmail, resetFlow } = useEmailOtpAuth();
@@ -1228,8 +1231,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       // which stack renders. Reporting early would flash the login screen at a
       // signed-in user.
       hydrated: storageHydrated && clerkLoaded,
-      signedIn: !!isSignedIn || pendingVerification,
-      emailVerified: !!isSignedIn,
+      signedIn: !!isSignedIn,
       email: pendingEmail,
       isStreaming,
       active,

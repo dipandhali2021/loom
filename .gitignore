@@ -41,3 +41,8 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# Hero video sources. The encoded clips in assets/videos/hero/ are committed --
+# they ship in the bundle -- but the multi-hundred-megabyte originals they are
+# cut from stay local. `scripts/encode-hero.sh` regenerates the clips from them.
+/assets/videos/*.mp4
